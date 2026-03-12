@@ -57,6 +57,8 @@ jobs:
 
   run_engine:
     runs-on: ubuntu-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     needs: determine_cycle
     permissions:
       contents: write
