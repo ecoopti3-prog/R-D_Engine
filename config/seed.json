@@ -1,0 +1,70 @@
+{
+  "domains": [
+    "thermal_management",
+    "power_delivery",
+    "memory_bandwidth",
+    "gpu_utilization",
+    "data_movement",
+    "pdn_chiplets"
+  ],
+  "seed_keywords": [
+    "GPU utilization cluster efficiency 2024",
+    "GPU scheduling pipeline stall optimization",
+    "distributed training communication overhead",
+    "data locality GPU memory bandwidth",
+    "all-reduce communication bottleneck LLM",
+    "memory wall transformer inference",
+    "data movement energy cost AI accelerator",
+    "thermal resistance GPU 3nm 2024",
+    "hotspot throttling AI chip workload",
+    "thermal-aware workload placement GPU",
+    "PDN chiplet voltage integrity",
+    "power delivery transient spike AI cluster",
+    "power-aware scheduling GPU cluster",
+    "NVIDIA Blackwell power delivery",
+    "AMD chiplet IR drop",
+    "TSMC 3nm thermal limit",
+    "bandwidth bottleneck LLM training",
+    "NVLink interconnect latency",
+    "HBM bandwidth utilization gap",
+    "near-memory compute power"
+  ],
+  "seed_sources": {
+    "arxiv": 15,
+    "google_patents": 8,
+    "job_postings": 7,
+    "opencompute": 8,
+    "semantic_scholar": 10,
+    "github_issues": 15,
+    "huggingface_papers": 10
+  },
+  "target_companies": [
+    "NVIDIA", "TSMC", "AMD", "Intel",
+    "Google", "Microsoft", "Meta", "Amazon"
+  ],
+  "intelligence_signals": [
+    "GPU utilization optimization engineer",
+    "distributed systems performance engineer",
+    "NVIDIA thermal packaging engineer",
+    "TSMC advanced packaging engineer",
+    "AMD power integrity engineer",
+    "Intel PDN engineer",
+    "Google TPU thermal engineer",
+    "data center power efficiency engineer"
+  ],
+  "opportunity_filters": {
+    "require_software_angle": true,
+    "max_capex_for_solution_usd": 5000000,
+    "target_efficiency_gain_percent": 5,
+    "exclude_domains": ["chip_fabrication", "hbm_design", "photonics_hardware"]
+  },
+  "week_one_plan": {
+    "day_1": "gpu_utilization",
+    "day_2": "data_movement",
+    "day_3": "power_delivery",
+    "day_4": "thermal_management",
+    "day_5": "pdn_chiplets",
+    "day_6": "cross_domain_patterns",
+    "day_7": "kill_round"
+  }
+}
