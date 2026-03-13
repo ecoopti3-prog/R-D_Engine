@@ -245,7 +245,9 @@ def run_cycle_2_physics_market(cycle_id: str, ideas: list[Idea]) -> list[Idea]:
     logger.info("=" * 60)
 
     all_findings = db.load_today_findings()
-    archive_embeddings = db.get_all_embeddings(exclude_cycle_id=cycle_id)
+    # Exclude the cycle whose ideas we are processing to avoid novelty killing them at sim=1.0
+    ideas_cycle_id = getattr(ideas[0], "cycle_id", None) if ideas else None
+    archive_embeddings = db.get_all_embeddings(exclude_cycle_id=ideas_cycle_id or cycle_id)
 
     ideas_as_dicts = [i.model_dump(mode="json") for i in ideas]
     findings_as_dicts = [f if isinstance(f, dict) else f for f in all_findings[:30]]
