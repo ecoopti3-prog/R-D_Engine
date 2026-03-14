@@ -25,7 +25,7 @@ _GROQ = {
     "model":              "llama-3.3-70b-versatile",
     "max_tokens":         4000,
     "temperature":        0.3,
-    "supports_json_mode": True,
+    "supports_json_mode":  False,
 }
 _SAMBANOVA = {
     "name":               "sambanova",
