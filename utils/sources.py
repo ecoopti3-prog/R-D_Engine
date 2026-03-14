@@ -774,9 +774,8 @@ RSS_FEEDS = [
     ("https://spectrum.ieee.org/feeds/feed.rss",            "ieee_spectrum"),
     ("https://www.eetimes.com/feed/",                       "ee_times"),
     ("https://semianalysis.com/feed/",                      "semianalysis"),
-    # AnandTech was archived/shut down in 2024 — replaced with active feeds:
     ("https://www.tomshardware.com/feeds/all",              "tomshardware"),
-    ("https://www.techpowerup.com/rss/news.xml",            "techpowerup"),
+    ("https://www.techpowerup.com/rss/",                    "techpowerup"),  # fixed: /rss/ not /rss/news.xml
 ]
 
 RELEVANT_KEYWORDS = [
@@ -1047,23 +1046,22 @@ def fetch_sec_edgar_signals(
     search_keywords = keywords or SEC_RISK_KEYWORDS
     since_date = (datetime.now() - timedelta(days=days_back)).strftime("%Y-%m-%d")
 
-    # בנה query — שילוב של חברת יעד + מילת מפתח טכנית
     for company_name, ticker in SEC_TARGET_COMPANIES[:5]:
         for kw in search_keywords[:4]:
-            query = f'"{ticker}" "{kw}"'
+            # שימוש בשם החברה המלא — מדויק יותר מ-ticker
+            query = f'"{company_name}" "{kw}"'
             try:
                 resp = _safe_get(
                     "https://efts.sec.gov/LATEST/search-index",
                     params={
-                        "q":           query,
-                        "forms":       "10-K,10-Q",
-                        "dateRange":   "custom",
-                        "startdt":     since_date,
-                        "hits.hits.total.value": 1,
+                        "q":         query,
+                        "forms":     "10-K,10-Q",
+                        "dateRange": "custom",
+                        "startdt":   since_date,
                     },
                     headers={
-                        "User-Agent":  "rd-engine-research/1.0 research@example.com",
-                        "Accept":      "application/json",
+                        "User-Agent": "rd-engine-research/1.0 research@example.com",
+                        "Accept":     "application/json",
                     },
                 )
                 if not resp:
@@ -1159,15 +1157,15 @@ def fetch_darpa_baa_signals(
 
     try:
         resp = _safe_get(
-            "https://api.sam.gov/opportunities/v2/search",
+            "https://api.sam.gov/prod/opportunities/v2/search",
             params={
-                "api_key":      api_key,
-                "ptype":        "o",           # o = solicitation (BAA נכלל כאן)
-                "deptname":     "Defense Advanced Research Projects Agency",
-                "postedFrom":   since_date,
-                "postedTo":     today_str,
-                "limit":        max_results * 2,  # נסנן אחר כך
-                "offset":       0,
+                "api_key":    api_key,
+                "ptype":      "o",
+                "agency":     "DARPA",
+                "postedFrom": since_date,
+                "postedTo":   today_str,
+                "limit":      str(max_results * 2),
+                "offset":     "0",
             },
             headers={"User-Agent": "rd-engine-research/1.0"},
         )
