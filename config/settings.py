@@ -61,7 +61,8 @@ _GEMINI = {
     "model":              "gemini-2.5-flash",
     "max_tokens":         4000,
     "temperature":        0.3,
-    "supports_json_mode": True,
+    "supports_json_mode": False,  # Gemini OpenAI-compat ignores response_format and returns ~15 tokens
+                                  # Use strict system prompt approach instead (handled in llm_router)
 }
 _COHERE = {
     "name":               "cohere",

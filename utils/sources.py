@@ -916,10 +916,11 @@ def fetch_rss_signals(max_per_feed: int = 5) -> list[dict]:
 
 OCP_REPOS = [
     "opencomputeproject/OCP-Profiles",
-    "opencomputeproject/Open-Rack",         # was: OpenRack — 404
     "opencomputeproject/Project_Olympus",
-    "opencomputeproject/Cerberus",          # was: Project_Cerberus — 404
     "opencomputeproject/ocp-diag-core",
+    "opencomputeproject/ocp-diag-host-python",
+    # Open-Rack ו-Cerberus הוסרו — ריפואים אלה לא ציבוריים תחת שמות אלה
+    # OCP specs זמינים דרך opencompute.org ישירות
 ]
 
 OCP_RELEVANT_KEYWORDS = [
@@ -1047,9 +1048,10 @@ def fetch_sec_edgar_signals(
     since_date = (datetime.now() - timedelta(days=days_back)).strftime("%Y-%m-%d")
 
     for company_name, ticker in SEC_TARGET_COMPANIES[:5]:
-        for kw in search_keywords[:4]:
-            # שימוש בשם החברה המלא — מדויק יותר מ-ticker
-            query = f'"{company_name}" "{kw}"'
+        for kw in search_keywords[:3]:
+            # EDGAR full-text search — endpoint נכון: /LATEST/search-index
+            # שם החברה + מילת מפתח בנפרד לתוצאות מדויקות יותר
+            query = f'"{ticker}" {kw}'
             try:
                 resp = _safe_get(
                     "https://efts.sec.gov/LATEST/search-index",
@@ -1058,6 +1060,7 @@ def fetch_sec_edgar_signals(
                         "forms":     "10-K,10-Q",
                         "dateRange": "custom",
                         "startdt":   since_date,
+                        "enddt":     datetime.now().strftime("%Y-%m-%d"),
                     },
                     headers={
                         "User-Agent": "rd-engine-research/1.0 research@example.com",
@@ -1126,8 +1129,7 @@ def fetch_sec_edgar_signals(
 # זה 2-3 שנים לפני השוק — מוקדם יותר מ-OSTI.
 # API: SAM.gov — מערכת רכש פדרלית. DEMO_KEY חינמי (1000 req/יום).
 
-SAM_DEMO_KEY = "DEMO_KEY"  # עובד ללא רישום עד 1000 בקשות ביום
-                            # לרישום חינמי לקיבולת גבוהה יותר: sam.gov
+SAM_DEMO_KEY = "DEMO_KEY"
 
 DARPA_RELEVANT_KEYWORDS = [
     "semiconductor", "computing", "microelectronics", "photonics",
@@ -1142,71 +1144,74 @@ def fetch_darpa_baa_signals(
     days_back: int = 365,
 ) -> list[dict]:
     """
-    מאחזר BAA (Broad Agency Announcements) של DARPA מ-SAM.gov.
-    BAA = בעיות שהממשלה האמריקאית משלמת לפתור — אינטל 2-3 שנים קדימה.
-    DEMO_KEY חינמי (sam.gov) — ללא רישום עד 1000 req/יום.
-    לקיבולת גבוהה יותר: הירשם ב-sam.gov וקבל key חינמי אמיתי.
-    Optional env var: SAM_GOV_API_KEY
+    מאחזר הזדמנויות מימון של DARPA משני מקורות חינמיים:
+      1. Grants.gov API — ממשלתי, חינמי, ללא key
+      2. DARPA News RSS — הכרזות BAA ישירות מ-darpa.mil
+    SAM.gov הוסר — endpoint לא יציב עם DEMO_KEY.
     """
-    import os
     results  = []
-    api_key  = os.environ.get("SAM_GOV_API_KEY", SAM_DEMO_KEY)
     kw_filter = [k.lower() for k in (keywords or DARPA_RELEVANT_KEYWORDS)]
-    since_date = (datetime.now() - timedelta(days=days_back)).strftime("%m/%d/%Y")
-    today_str  = datetime.now().strftime("%m/%d/%Y")
+    since_date = (datetime.now() - timedelta(days=days_back)).strftime("%Y-%m-%d")
 
+    # ── מקור 1: Grants.gov — חינמי, ללא key ──────────────────────────────────
     try:
         resp = _safe_get(
-            "https://api.sam.gov/prod/opportunities/v2/search",
+            "https://apply07.grants.gov/grantsws/rest/opportunities/search/",
             params={
-                "api_key":    api_key,
-                "ptype":      "o",
-                "agency":     "DARPA",
-                "postedFrom": since_date,
-                "postedTo":   today_str,
-                "limit":      str(max_results * 2),
-                "offset":     "0",
+                "keyword":   "DARPA " + " ".join((keywords or DARPA_RELEVANT_KEYWORDS)[:3]),
+                "oppStatuses": "forecasted|posted",
+                "rows":      str(max_results),
+                "sortBy":    "openDate|desc",
             },
-            headers={"User-Agent": "rd-engine-research/1.0"},
+            headers={"User-Agent": "rd-engine-research/1.0", "Accept": "application/json"},
         )
-
-        if not resp:
-            return []
-
-        data = resp.json()
-        opportunities = data.get("opportunitiesData", [])
-
-        for opp in opportunities:
-            title       = opp.get("title", "")
-            description = (opp.get("description") or "")[:600]
-            sol_number  = opp.get("solicitationNumber", "")
-            posted_date = opp.get("postedDate", "")
-            opp_type    = opp.get("typeOfSetAside", "") or opp.get("type", "")
-            ui_link     = opp.get("uiLink", "")
-            if not ui_link:
-                ui_link = f"https://sam.gov/opp/{opp.get('noticeId','')}/view"
-
-            # סנן רק הזדמנויות שרלוונטיות לתחום
-            combined = (title + " " + description).lower()
-            if not any(kw in combined for kw in kw_filter):
-                continue
-
-            results.append({
-                "title":         f"[DARPA BAA] {title}",
-                "abstract":      description or f"DARPA solicitation: {title}",
-                "url":           ui_link,
-                "sol_number":    sol_number,
-                "posted_date":   posted_date,
-                "opp_type":      opp_type,
-                "source":        "darpa_baa",
-                "signal_type":   "government_funding_signal",
-            })
-
-            if len(results) >= max_results:
-                break
-
+        if resp and resp.status_code == 200:
+            data = resp.json()
+            opps = data.get("oppHits", [])
+            for opp in opps[:max_results]:
+                title = opp.get("title", "")
+                desc  = (opp.get("synopsis") or "")[:500]
+                combined = (title + " " + desc).lower()
+                if not any(kw in combined for kw in kw_filter):
+                    continue
+                results.append({
+                    "title":       f"[DARPA/GOV] {title}",
+                    "abstract":    desc or title,
+                    "url":         f"https://www.grants.gov/search-results-detail/{opp.get('id','')}",
+                    "posted_date": opp.get("openDate", ""),
+                    "source":      "darpa_baa",
+                    "signal_type": "government_funding_signal",
+                })
     except Exception as e:
-        logger.warning(f"[DARPA] SAM.gov fetch failed: {e}")
+        logger.debug(f"[DARPA] Grants.gov error: {e}")
+
+    # ── מקור 2: DARPA News RSS ────────────────────────────────────────────────
+    if len(results) < max_results:
+        try:
+            import xml.etree.ElementTree as ET
+            resp = _safe_get(
+                "https://www.darpa.mil/rss-feeds/opportunities.xml",
+                headers={"User-Agent": "rd-engine-research/1.0"},
+            )
+            if resp and resp.status_code == 200:
+                root = ET.fromstring(resp.text)
+                for item in root.findall(".//item")[:max_results]:
+                    title = (item.findtext("title") or "").strip()
+                    desc  = (item.findtext("description") or "")[:400].strip()
+                    link  = (item.findtext("link") or "").strip()
+                    combined = (title + " " + desc).lower()
+                    if not any(kw in combined for kw in kw_filter):
+                        continue
+                    results.append({
+                        "title":       f"[DARPA] {title}",
+                        "abstract":    desc or title,
+                        "url":         link,
+                        "posted_date": item.findtext("pubDate") or "",
+                        "source":      "darpa_baa",
+                        "signal_type": "government_funding_signal",
+                    })
+        except Exception as e:
+            logger.debug(f"[DARPA] RSS error: {e}")
 
     logger.info(f"[DARPA] Fetched {len(results)} DARPA BAA signals")
     return results
