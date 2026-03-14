@@ -14,7 +14,7 @@ AgentStatus   = Literal["done", "failed", "skipped"]
 IdeaStatus    = Literal["active", "killed", "archived", "diamond", "physics_unverified"]
 KillCategory  = str  # free-form — LLM may return any value
 FindingType   = Literal["bottleneck", "limit", "trend", "gap"]
-Domain        = Literal["thermal", "power", "data_movement", "hardware", "pdn", "cross_domain", "packaging"]
+Domain        = Literal["thermal", "power", "data_movement", "hardware", "pdn", "cross_domain", "packaging", "bandwidth", "memory", "interconnect", "compute"]
 RelationType  = Literal["related", "contradicts", "extends", "duplicate"]
 
 
