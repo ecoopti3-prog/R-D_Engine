@@ -1,7 +1,7 @@
 import os
 from dotenv import load_dotenv
 
-load_dotenv(override=True)
+load_dotenv()
 
 # ── LLM API Keys ──────────────────────────────────────────
 GROQ_API_KEY      = os.environ.get("GROQ_API_KEY", "")
@@ -11,6 +11,7 @@ MISTRAL_API_KEY   = os.environ.get("MISTRAL_API_KEY", "")
 GEMINI_API_KEY    = os.environ.get("GEMINI_API_KEY", "")
 COHERE_API_KEY    = os.environ.get("COHERE_API_KEY", "")
 GITHUB_TOKEN      = os.environ.get("GITHUB_TOKEN", "")   # free — github.com/settings/tokens
+SAM_GOV_API_KEY   = os.environ.get("SAM_GOV_API_KEY", "DEMO_KEY")  # free — sam.gov (DEMO_KEY = 1000 req/day without registration)
 
 # ── Supabase ──────────────────────────────────────────────
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
@@ -18,52 +19,58 @@ SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
 
 # ── LLM definitions (shared pool) ────────────────────────
 _GROQ = {
-    "name":        "groq",
-    "base_url":    "https://api.groq.com/openai/v1",
-    "api_key_env": GROQ_API_KEY,
-    "model":       "llama-3.3-70b-versatile",
-    "max_tokens":  4000,
-    "temperature": 0.3,
+    "name":               "groq",
+    "base_url":           "https://api.groq.com/openai/v1",
+    "api_key_env":        GROQ_API_KEY,
+    "model":              "llama-3.3-70b-versatile",
+    "max_tokens":         4000,
+    "temperature":        0.3,
+    "supports_json_mode": True,
 }
 _SAMBANOVA = {
-    "name":        "sambanova",
-    "base_url":    "https://api.sambanova.ai/v1",
-    "api_key_env": SAMBANOVA_API_KEY,
-    "model":       "DeepSeek-V3.2",
-    "max_tokens":  4000,
-    "temperature": 0.3,
+    "name":               "sambanova",
+    "base_url":           "https://api.sambanova.ai/v1",
+    "api_key_env":        SAMBANOVA_API_KEY,
+    "model":              "DeepSeek-V3.2",
+    "max_tokens":         4000,
+    "temperature":        0.3,
+    "supports_json_mode": False,   # SambaNova compat layer ignores response_format
 }
 _FIREWORKS = {
-    "name":        "fireworks",
-    "base_url":    "https://api.fireworks.ai/inference/v1",
-    "api_key_env": FIREWORKS_API_KEY,
-    "model":       "accounts/fireworks/models/deepseek-v3p2",
-    "max_tokens":  4000,
-    "temperature": 0.3,
+    "name":               "fireworks",
+    "base_url":           "https://api.fireworks.ai/inference/v1",
+    "api_key_env":        FIREWORKS_API_KEY,
+    "model":              "accounts/fireworks/models/deepseek-v3p2",
+    "max_tokens":         4000,
+    "temperature":        0.3,
+    "supports_json_mode": True,
 }
 _MISTRAL = {
-    "name":        "mistral",
-    "base_url":    "https://api.mistral.ai/v1",
-    "api_key_env": MISTRAL_API_KEY,
-    "model":       "mistral-large-latest",
-    "max_tokens":  4000,
-    "temperature": 0.3,
+    "name":               "mistral",
+    "base_url":           "https://api.mistral.ai/v1",
+    "api_key_env":        MISTRAL_API_KEY,
+    "model":              "mistral-large-latest",
+    "max_tokens":         4000,
+    "temperature":        0.3,
+    "supports_json_mode": True,
 }
 _GEMINI = {
-    "name":        "gemini",
-    "base_url":    "https://generativelanguage.googleapis.com/v1beta/openai",
-    "api_key_env": GEMINI_API_KEY,
-    "model":       "gemini-2.5-flash",
-    "max_tokens":  4000,
-    "temperature": 0.3,
+    "name":               "gemini",
+    "base_url":           "https://generativelanguage.googleapis.com/v1beta/openai",
+    "api_key_env":        GEMINI_API_KEY,
+    "model":              "gemini-2.5-flash",
+    "max_tokens":         4000,
+    "temperature":        0.3,
+    "supports_json_mode": True,
 }
 _COHERE = {
-    "name":        "cohere",
-    "base_url":    "https://api.cohere.com/compatibility/v1",
-    "api_key_env": COHERE_API_KEY,
-    "model":       "command-a-reasoning-08-2025",
-    "max_tokens":  4000,
-    "temperature": 0.3,
+    "name":               "cohere",
+    "base_url":           "https://api.cohere.com/compatibility/v1",
+    "api_key_env":        COHERE_API_KEY,
+    "model":              "command-a-reasoning-08-2025",
+    "max_tokens":         4000,
+    "temperature":        0.3,
+    "supports_json_mode": False,   # Cohere compat endpoint doesn't honour response_format
 }
 
 # ── REASONING chain ───────────────────────────────────────

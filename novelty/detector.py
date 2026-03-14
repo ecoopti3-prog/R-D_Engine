@@ -20,9 +20,27 @@ def _get_model():
     global _model
     if _model is None:
         try:
+            import os
             from sentence_transformers import SentenceTransformer
+
+            # Authenticate with HuggingFace Hub to avoid unauthenticated redirect
+            # storms and rate-limit exposure. Token is optional — anonymous access
+            # still works, but authentication eliminates the 307 redirect chain and
+            # suppresses the rate-limit warning. Set HF_TOKEN in your .env file.
+            hf_token = os.environ.get("HF_TOKEN", "")
+            if hf_token:
+                try:
+                    from huggingface_hub import login as hf_login
+                    hf_login(token=hf_token, add_to_git_credential=False)
+                except Exception:
+                    pass  # huggingface_hub not installed or login failed — proceed anyway
+
             logger.info(f"[Novelty] Loading embedding model: {EMBEDDING_MODEL}")
-            _model = SentenceTransformer(EMBEDDING_MODEL)
+            # token= kwarg passes auth directly to SentenceTransformer download
+            _model = SentenceTransformer(
+                EMBEDDING_MODEL,
+                token=hf_token if hf_token else None,
+            )
         except ImportError:
             logger.error("[Novelty] sentence-transformers not installed. Run: pip install sentence-transformers")
             raise

@@ -224,47 +224,62 @@ def _fetch_uspto_patents(
     max_results: int,
 ) -> list[dict]:
     """
-    USPTO PatentsView API — actually has a free REST API.
-    https://patentsview.org/apis/purpose
+    USPTO PatentsView API v1 — migrated from dead api.patentsview.org (410 Gone).
+    New endpoint: https://search.patentsview.org/api/v1/patent/
+    Free without API key; register at patentsview.org for higher rate limits.
+    Optional env var: PATENTSVIEW_API_KEY
     """
+    import os
     results = []
 
     keyword_str = " AND ".join(keywords[:4])
-    assignee_queries = [{"_contains": {"assignee_organization": a}} for a in assignees[:3]]
+    two_years_ago = (datetime.now() - timedelta(days=365 * 2)).strftime("%Y-%m-%d")
 
     payload = {
         "q": {
             "_and": [
-                {"_text_all": {"patent_abstract": keyword_str}},
-                {"_gte": {"patent_date": (datetime.now() - timedelta(days=365 * 2)).strftime("%Y-%m-%d")}},
+                {"_text_all": {"patent_title": keyword_str}},
+                {"_gte": {"patent_date": two_years_ago}},
             ]
         },
-        "f": ["patent_number", "patent_title", "patent_abstract", "patent_date", "assignee_organization"],
-        "o": {"per_page": max_results, "sort": [{"patent_date": "desc"}]},
+        "f": [
+            "patent_id", "patent_title", "patent_abstract",
+            "patent_date", "assignees.assignee_organization",
+        ],
+        "s": [{"patent_date": "desc"}],
+        "o": {"per_page": max_results},
     }
 
-    resp = _safe_get(
-        "https://api.patentsview.org/patents/query",
-        params={"q": str(payload["q"]), "f": str(payload["f"]), "o": str(payload["o"])},
-    )
+    headers = {
+        "Content-Type": "application/json",
+        "User-Agent":   "rd-engine-research/1.0",
+    }
+    api_key = os.environ.get("PATENTSVIEW_API_KEY", "")
+    if api_key:
+        headers["X-Api-Key"] = api_key
 
-    # PatentsView requires POST with JSON — use requests.post directly
     try:
         resp = requests.post(
-            "https://api.patentsview.org/patents/query",
+            "https://search.patentsview.org/api/v1/patent/",
             json=payload,
-            headers={"User-Agent": "rd-engine-research/1.0"},
+            headers=headers,
             timeout=_REQUEST_TIMEOUT,
         )
         resp.raise_for_status()
         data = resp.json()
 
         for p in data.get("patents", []):
+            # v1 API nests assignees as a list of objects
+            assignee_list = p.get("assignees") or []
+            assignee = (
+                assignee_list[0].get("assignee_organization", "")
+                if assignee_list else ""
+            )
             results.append({
                 "title":       p.get("patent_title", ""),
                 "abstract":    (p.get("patent_abstract") or "")[:600],
-                "url":         f"https://patents.google.com/patent/US{p.get('patent_number')}",
-                "assignee":    p.get("assignee_organization", ""),
+                "url":         f"https://patents.google.com/patent/US{p.get('patent_id', '')}",
+                "assignee":    assignee,
                 "filing_date": p.get("patent_date", ""),
                 "source":      "patent",
             })
@@ -282,40 +297,94 @@ def fetch_job_postings_signals(
     role_keywords: list[str],
 ) -> list[dict]:
     """
-    Fetch job posting signals from LinkedIn/Indeed public search.
+    Job posting signals from two free, open APIs:
+      1. RemoteOK (https://remoteok.com/api) — JSON, no key, no scraping
+      2. Hacker News "Who is Hiring" monthly thread via Algolia search API
+         (https://hn.algolia.com/api/v1) — completely free, no key
 
-    Reality check: LinkedIn blocks scrapers aggressively.
-    We use a lightweight approach: check company engineering blogs and public job APIs.
-    Returns signals — not full job descriptions.
+    Indeed/LinkedIn are permanently blocked via Cloudflare. Dropped.
     """
     signals = []
+    companies_lower = {c.lower(): c for c in companies}
+    kw_lower        = {k.lower(): k for k in role_keywords}
 
-    # Try Indeed's publicly accessible job search (limited but real)
-    for company in companies[:5]:
-        for keyword in role_keywords[:3]:
-            query = f"{company} {keyword} engineer"
-            resp = _safe_get(
-                "https://www.indeed.com/jobs",
-                params={"q": query, "l": "", "sort": "date"},
-                headers={
-                    "User-Agent": "Mozilla/5.0 (compatible; research-bot/1.0)",
-                    "Accept": "text/html",
-                }
-            )
+    # ── Source 1: RemoteOK ────────────────────────────────────────────────────
+    try:
+        resp = _safe_get(
+            "https://remoteok.com/api",
+            headers={"User-Agent": "rd-engine-research/1.0", "Accept": "application/json"},
+        )
+        if resp:
+            jobs = resp.json()
+            if isinstance(jobs, list) and len(jobs) > 1:
+                jobs = jobs[1:]  # first element is a metadata notice dict
+                for job in jobs[:100]:
+                    company_raw = (job.get("company") or "").lower()
+                    position    = (job.get("position") or "").lower()
+                    desc        = (job.get("description") or "").lower()
+                    combined    = f"{company_raw} {position} {desc}"
 
-            if resp and resp.status_code == 200:
-                # Simple count from HTML (not full parsing)
-                count_signal = resp.text.count(keyword.lower())
-                if count_signal > 5:
+                    matched_company = next(
+                        (orig for low, orig in companies_lower.items() if low in company_raw), None
+                    )
+                    if not matched_company:
+                        continue
+                    matched_kw = next(
+                        (orig for low, orig in kw_lower.items() if low in combined), None
+                    )
+                    if not matched_kw:
+                        continue
+
                     signals.append({
-                        "company": company,
-                        "keyword": keyword,
-                        "signal_strength": min(count_signal // 5, 10),
-                        "url": resp.url,
-                        "note": f"Found {count_signal} mentions of '{keyword}' in {company} job listings",
+                        "company":         matched_company,
+                        "keyword":         matched_kw,
+                        "signal_strength": 5,
+                        "url":             job.get("url", "https://remoteok.com"),
+                        "note":            f"RemoteOK: {job.get('position','')} @ {job.get('company','')}",
                     })
+    except Exception as e:
+        logger.debug(f"[Jobs] RemoteOK error: {e}")
 
-            time.sleep(1.0)  # Be polite
+    # ── Source 2: Hacker News "Who is Hiring" ─────────────────────────────────
+    try:
+        # Find latest monthly thread
+        search_resp = _safe_get(
+            "https://hn.algolia.com/api/v1/search",
+            params={
+                "tags":        "story,ask_hn",
+                "query":       "Ask HN: Who is hiring",
+                "hitsPerPage": 1,
+            },
+        )
+        if search_resp:
+            hits = search_resp.json().get("hits", [])
+            if hits:
+                story_id = hits[0].get("objectID", "")
+                comments_resp = _safe_get(
+                    "https://hn.algolia.com/api/v1/search",
+                    params={
+                        "tags":        f"comment,story_{story_id}",
+                        "hitsPerPage": 200,
+                    },
+                )
+                if comments_resp:
+                    for comment in comments_resp.json().get("hits", []):
+                        text = (comment.get("comment_text") or "").lower()
+                        for low_c, orig_c in companies_lower.items():
+                            if low_c not in text:
+                                continue
+                            for low_k, orig_k in kw_lower.items():
+                                if low_k in text:
+                                    signals.append({
+                                        "company":         orig_c,
+                                        "keyword":         orig_k,
+                                        "signal_strength": 7,  # HN signals are high-quality
+                                        "url": f"https://news.ycombinator.com/item?id={comment.get('objectID','')}",
+                                        "note":  f"HN Who Is Hiring: {orig_c} hiring for {orig_k}",
+                                    })
+                                    break  # one match per company per comment
+    except Exception as e:
+        logger.debug(f"[Jobs] HN error: {e}")
 
     if not signals:
         logger.info("[Jobs] No job posting signals retrieved — LLM will use its knowledge")
@@ -328,19 +397,23 @@ def fetch_job_postings_signals(
 def fetch_all_for_cycle1(seed: dict) -> dict:
     """
     Fetch all data needed for Cycle 1 (Harvest).
-    Returns dict with: papers, patents, job_signals, github_signals, rss_signals.
+    Returns dict with: papers, patents, job_signals, github_signals, rss_signals,
+                       edgar_signals, darpa_signals.
     Called once at the start of Cycle 1.
 
     Sources (all free):
-      1. arXiv          — academic papers
-      2. Semantic Scholar — citations + broader coverage
-      3. USPTO Patents  — pending patents = unsolved problems
-      4. Indeed         — job postings = where companies invest
-      5. GitHub Issues  — real engineer pain points (token optional)
-      6. HuggingFace    — daily trending AI papers
-      7. OpenReview     — NeurIPS/ICLR/ICML with reviewer criticism
-      8. OSTI/DOE       — DARPA-funded research, 2-3yr ahead of market
-      9. RSS feeds      — IEEE Spectrum, SemiAnalysis, EE Times, AnandTech
+      1.  arXiv           — academic papers
+      2.  Semantic Scholar — citations + broader coverage
+      3.  USPTO Patents   — pending patents = unsolved problems
+      4.  RemoteOK + HN   — job postings = where companies invest
+      5.  GitHub Issues   — real engineer pain points (token optional)
+      6.  HuggingFace     — daily trending AI papers
+      7.  OpenReview      — NeurIPS/ICLR/ICML with reviewer criticism
+      8.  OSTI/DOE        — DARPA-funded research, 2-3yr ahead of market
+      9.  RSS feeds       — IEEE Spectrum, SemiAnalysis, EE Times, Tom's Hardware
+      10. OCP GitHub      — Meta/Microsoft/Google/Amazon datacenter specs
+      11. SEC EDGAR       — 10-K/10-Q Risk Factors = what giants admit is broken
+      12. DARPA BAA       — gov funding signals = 2-3yr forward technology bets
     """
     import os
     keywords       = seed.get("seed_keywords", [])
@@ -348,9 +421,8 @@ def fetch_all_for_cycle1(seed: dict) -> dict:
     signals        = seed.get("intelligence_signals", [])
     github_token   = os.environ.get("GITHUB_TOKEN", "")
 
-    logger.info("[Sources] Starting full fetch for Cycle 1 harvest — 9 sources")
+    logger.info("[Sources] Starting full fetch for Cycle 1 harvest — 12 sources")
 
-    # ── Warn explicitly about optional keys so failures are never silent ──────
     if not github_token:
         logger.warning(
             "[Sources] GITHUB_TOKEN not set — GitHub Issues and OCP signals will be empty. "
@@ -362,6 +434,8 @@ def fetch_all_for_cycle1(seed: dict) -> dict:
         "job_signals":    [],
         "github_signals": [],
         "rss_signals":    [],
+        "edgar_signals":  [],   # NEW: SEC 10-K/10-Q risk factors
+        "darpa_signals":  [],   # NEW: DARPA BAA funding opportunities
     }
 
     # 1. arXiv
@@ -428,7 +502,7 @@ def fetch_all_for_cycle1(seed: dict) -> dict:
     except Exception as e:
         logger.error(f"[Sources] GitHub failed: {e}")
 
-    # 9. RSS feeds (IEEE Spectrum, SemiAnalysis, EE Times, AnandTech)
+    # 9. RSS feeds (IEEE Spectrum, SemiAnalysis, EE Times, Tom's Hardware, TechPowerUp)
     try:
         items = fetch_rss_signals(max_per_feed=5)
         result["rss_signals"] = items
@@ -444,8 +518,24 @@ def fetch_all_for_cycle1(seed: dict) -> dict:
     except Exception as e:
         logger.error(f"[Sources] OCP failed: {e}")
 
+    # 11. SEC EDGAR — 10-K/10-Q Risk Factors (what the giants admit is unsolved)
+    try:
+        items = fetch_sec_edgar_signals(keywords=keywords[:6], max_results=10, days_back=180)
+        result["edgar_signals"] = items
+        logger.info(f"[Sources] SEC EDGAR: {len(items)}")
+    except Exception as e:
+        logger.error(f"[Sources] SEC EDGAR failed: {e}")
+
+    # 12. DARPA BAA — active funding solicitations (2-3yr forward signal)
+    try:
+        items = fetch_darpa_baa_signals(keywords=keywords[:6], max_results=8, days_back=365)
+        result["darpa_signals"] = items
+        logger.info(f"[Sources] DARPA BAA: {len(items)}")
+    except Exception as e:
+        logger.error(f"[Sources] DARPA failed: {e}")
+
     total = sum(len(v) for v in result.values())
-    logger.info(f"[Sources] Total items fetched: {total} (10 sources)")
+    logger.info(f"[Sources] Total items fetched: {total} (12 sources)")
     return result
 
 
@@ -681,10 +771,12 @@ def fetch_osti_research(keywords: list[str], max_results: int = 10) -> list[dict
 # ── RSS Feeds (IEEE Spectrum, SemiAnalysis, EE Times) ────────────────────────
 
 RSS_FEEDS = [
-    ("https://spectrum.ieee.org/feeds/feed.rss",        "ieee_spectrum"),
-    ("https://www.eetimes.com/feed/",                   "ee_times"),
-    ("https://semianalysis.com/feed/",                   "semianalysis"),
-    ("https://www.anandtech.com/rss/",                   "anandtech"),
+    ("https://spectrum.ieee.org/feeds/feed.rss",            "ieee_spectrum"),
+    ("https://www.eetimes.com/feed/",                       "ee_times"),
+    ("https://semianalysis.com/feed/",                      "semianalysis"),
+    # AnandTech was archived/shut down in 2024 — replaced with active feeds:
+    ("https://www.tomshardware.com/feeds/all",              "tomshardware"),
+    ("https://www.techpowerup.com/rss/news.xml",            "techpowerup"),
 ]
 
 RELEVANT_KEYWORDS = [
@@ -693,16 +785,83 @@ RELEVANT_KEYWORDS = [
     "3nm", "2nm", "cowos", "nvlink", "pdn", "bandwidth",
 ]
 
+
+def _parse_rss_items(xml_text: str, source_name: str) -> list:
+    """
+    Two-stage XML parser:
+      1. stdlib xml.etree.ElementTree — fast, strict
+      2. Fallback: re-encode bytes stripping illegal XML chars, try again
+      3. Last resort: regex scrape of <title> and <link> tags (no deps)
+    This handles malformed feeds (bare &, invalid chars, encoding issues)
+    without requiring BeautifulSoup/lxml as a new dependency.
+    """
+    import xml.etree.ElementTree as ET
+    import re
+
+    ns = {"atom": "http://www.w3.org/2005/Atom"}
+
+    def _extract_items(root):
+        return root.findall(".//item") or root.findall(".//atom:entry", ns)
+
+    def _get_field(item, *tags):
+        for tag in tags:
+            if "atom:" in tag:
+                val = item.findtext(tag, namespaces=ns)
+            else:
+                val = item.findtext(tag)
+            if val:
+                return val.strip()
+        return ""
+
+    def _get_link(item):
+        lnk = _get_field(item, "link")
+        if not lnk:
+            atom_link = item.find("atom:link", ns)
+            if atom_link is not None:
+                lnk = atom_link.get("href", "")
+        return lnk
+
+    # Stage 1 — strict parse
+    try:
+        root = ET.fromstring(xml_text)
+        return [(item, _get_field, _get_link) for item in _extract_items(root)]
+    except ET.ParseError:
+        pass
+
+    # Stage 2 — strip illegal XML chars (control chars + bare & not in entity)
+    try:
+        # Replace bare & that aren't part of &amp; &lt; etc.
+        cleaned = re.sub(r'&(?!(?:amp|lt|gt|quot|apos|#\d+|#x[0-9a-fA-F]+);)', '&amp;', xml_text)
+        # Strip non-XML characters (ASCII control chars except tab/LF/CR)
+        cleaned = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', cleaned)
+        root = ET.fromstring(cleaned)
+        return [(item, _get_field, _get_link) for item in _extract_items(root)]
+    except ET.ParseError as e:
+        logger.debug(f"[RSS] {source_name} still invalid after cleanup: {e} — using regex fallback")
+
+    # Stage 3 — regex scrape (zero extra deps, handles completely broken XML)
+    items_out = []
+    titles = re.findall(r'<title[^>]*>(?:<!\[CDATA\[)?(.*?)(?:\]\]>)?</title>', xml_text, re.S)
+    links  = re.findall(r'<link[^>]*>(https?://[^<]+)</link>', xml_text)
+    descs  = re.findall(r'<description[^>]*>(?:<!\[CDATA\[)?(.*?)(?:\]\]>)?</description>', xml_text, re.S)
+    titles = titles[1:]  # skip feed-level <title>
+    for i, title in enumerate(titles):
+        link = links[i] if i < len(links) else ""
+        desc = descs[i] if i < len(descs) else ""
+        items_out.append({
+            "title": title.strip(),
+            "desc":  desc.strip()[:400],
+            "link":  link.strip(),
+        })
+    return items_out  # note: different tuple format — handled below
+
+
 def fetch_rss_signals(max_per_feed: int = 5) -> list[dict]:
     """
-    Parse RSS feeds from IEEE Spectrum, EE Times, SemiAnalysis, AnandTech.
-    Filter for relevant keywords. No API key needed.
+    Parse RSS feeds. Robust against malformed XML (AnandTech-style invalid tokens).
+    Falls back through three parsing stages before giving up on a feed.
+    No new dependencies required.
     """
-    try:
-        import xml.etree.ElementTree as ET
-    except ImportError:
-        return []
-
     results = []
 
     for feed_url, source_name in RSS_FEEDS:
@@ -710,28 +869,22 @@ def fetch_rss_signals(max_per_feed: int = 5) -> list[dict]:
         if not resp:
             continue
         try:
-            root = ET.fromstring(resp.text)
-            ns   = {"atom": "http://www.w3.org/2005/Atom"}
+            parsed = _parse_rss_items(resp.text, source_name)
+            count  = 0
 
-            # Handle both RSS 2.0 and Atom formats
-            items = root.findall(".//item") or root.findall(".//atom:entry", ns)
-
-            count = 0
-            for item in items:
-                title = (
-                    (item.findtext("title") or item.findtext("atom:title", namespaces=ns) or "")
-                    .strip()
-                )
-                desc = (
-                    (item.findtext("description") or
-                     item.findtext("summary") or
-                     item.findtext("atom:summary", namespaces=ns) or "")
-                    [:400].strip()
-                )
-                link = (
-                    item.findtext("link") or
-                    (item.find("atom:link", ns).get("href", "") if item.find("atom:link", ns) is not None else "")
-                )
+            for item in parsed:
+                # Handle both ET-tuple format and regex-dict format
+                if isinstance(item, dict):
+                    title    = item["title"]
+                    desc     = item["desc"]
+                    link     = item["link"]
+                else:
+                    et_item, _get_field, _get_link = item
+                    title = _get_field(et_item, "title", "atom:title")
+                    desc  = _get_field(
+                        et_item, "description", "summary", "atom:summary"
+                    )[:400]
+                    link  = _get_link(et_item)
 
                 combined = (title + " " + desc).lower()
                 if not any(kw in combined for kw in RELEVANT_KEYWORDS):
@@ -764,9 +917,9 @@ def fetch_rss_signals(max_per_feed: int = 5) -> list[dict]:
 
 OCP_REPOS = [
     "opencomputeproject/OCP-Profiles",
-    "opencomputeproject/OpenRack",
+    "opencomputeproject/Open-Rack",         # was: OpenRack — 404
     "opencomputeproject/Project_Olympus",
-    "opencomputeproject/Project_Cerberus",
+    "opencomputeproject/Cerberus",          # was: Project_Cerberus — 404
     "opencomputeproject/ocp-diag-core",
 ]
 
@@ -776,13 +929,12 @@ OCP_RELEVANT_KEYWORDS = [
     "efficiency", "watt", "heat", "temperature",
 ]
 
+
 def fetch_ocp_signals(github_token: str = "", max_items: int = 20) -> list[dict]:
     """
     Fetch Open Compute Project specs and issues from GitHub.
     OCP = Meta/Microsoft/Google/Amazon publish real datacenter hardware specs here.
-    This is ground truth for what thermal/power constraints look like at scale.
-
-    Returns list of {title, body, url, repo, signal_type}.
+    404s are silently skipped (private or renamed repos — not an error).
     """
     import os
     if not github_token:
@@ -796,13 +948,13 @@ def fetch_ocp_signals(github_token: str = "", max_items: int = 20) -> list[dict]
 
     for repo in OCP_REPOS:
         # 1. Fetch recent issues — real spec discussions
-        resp = _safe_get(
-            f"https://api.github.com/repos/{repo}/issues",
-            params={"state": "open", "sort": "created", "direction": "desc", "per_page": 5},
-            headers=headers,
-        )
-        if resp:
-            try:
+        try:
+            resp = _safe_get(
+                f"https://api.github.com/repos/{repo}/issues",
+                params={"state": "open", "sort": "created", "direction": "desc", "per_page": 5},
+                headers=headers,
+            )
+            if resp and resp.status_code == 200:
                 issues = resp.json()
                 if isinstance(issues, list):
                     for issue in issues[:3]:
@@ -818,19 +970,19 @@ def fetch_ocp_signals(github_token: str = "", max_items: int = 20) -> list[dict]
                             "signal_type": "ocp_spec_discussion",
                             "created_at":  issue.get("created_at", ""),
                         })
-            except Exception as e:
-                logger.warning(f"[OCP] Issues parse error {repo}: {e}")
+        except Exception as e:
+            logger.debug(f"[OCP] Issues error {repo}: {e}")  # debug — not a warning
 
         time.sleep(0.5)
 
         # 2. Fetch recent releases — new hardware specs published
-        resp = _safe_get(
-            f"https://api.github.com/repos/{repo}/releases",
-            params={"per_page": 3},
-            headers=headers,
-        )
-        if resp:
-            try:
+        try:
+            resp = _safe_get(
+                f"https://api.github.com/repos/{repo}/releases",
+                params={"per_page": 3},
+                headers=headers,
+            )
+            if resp and resp.status_code == 200:
                 releases = resp.json()
                 if isinstance(releases, list):
                     for rel in releases[:2]:
@@ -846,10 +998,217 @@ def fetch_ocp_signals(github_token: str = "", max_items: int = 20) -> list[dict]
                             "signal_type": "ocp_spec_release",
                             "created_at":  rel.get("published_at", ""),
                         })
-            except Exception as e:
-                logger.warning(f"[OCP] Releases parse error {repo}: {e}")
+        except Exception as e:
+            logger.debug(f"[OCP] Releases error {repo}: {e}")  # debug — not a warning
 
         time.sleep(0.5)
 
     logger.info(f"[OCP] Fetched {len(results)} OCP signals")
+    return results
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SEC EDGAR + DARPA BAA — אותות אינטליגנציה עסקית עמוקים
+# ══════════════════════════════════════════════════════════════════════════════
+
+# ── SEC EDGAR ─────────────────────────────────────────────────────────────────
+# NVIDIA, TSMC, AMD, Intel חייבות לפרט בדוחות 10-K ו-10-Q שלהן בדיוק
+# אילו בעיות טכניות הן מתמודדות איתן (Risk Factors + MD&A).
+# זה מידע גולמי ישיר מהחברות עצמן — לא אנליסטים, לא עיתונות.
+# API: EDGAR Full-Text Search — חינמי, ללא key, ממשלתי.
+
+SEC_TARGET_COMPANIES = [
+    ("NVIDIA CORPORATION",    "nvda"),
+    ("TAIWAN SEMICONDUCTOR",  "tsm"),
+    ("ADVANCED MICRO DEVICES","amd"),
+    ("INTEL CORPORATION",     "intc"),
+    ("GOOGLE LLC",            "googl"),
+    ("MICROSOFT CORPORATION", "msft"),
+]
+
+SEC_RISK_KEYWORDS = [
+    "thermal", "power consumption", "yield", "packaging",
+    "bandwidth", "memory", "bottleneck", "constraint",
+    "supply chain", "manufacturing", "chip", "semiconductor",
+]
+
+
+def fetch_sec_edgar_signals(
+    keywords: list[str] = None,
+    max_results: int = 10,
+    days_back: int = 180,
+) -> list[dict]:
+    """
+    מחפש ב-EDGAR Full-Text Search דוחות 10-K ו-10-Q של חברות יעד.
+    מחזיר קטעים שמזכירים צווארי בקבוק טכניים — Risk Factors ו-MD&A.
+    חינמי לחלוטין, ללא API key, ללא rate limit משמעותי.
+    https://efts.sec.gov/LATEST/search-index (ממשלת ארה"ב)
+    """
+    results = []
+    search_keywords = keywords or SEC_RISK_KEYWORDS
+    since_date = (datetime.now() - timedelta(days=days_back)).strftime("%Y-%m-%d")
+
+    # בנה query — שילוב של חברת יעד + מילת מפתח טכנית
+    for company_name, ticker in SEC_TARGET_COMPANIES[:5]:
+        for kw in search_keywords[:4]:
+            query = f'"{ticker}" "{kw}"'
+            try:
+                resp = _safe_get(
+                    "https://efts.sec.gov/LATEST/search-index",
+                    params={
+                        "q":           query,
+                        "forms":       "10-K,10-Q",
+                        "dateRange":   "custom",
+                        "startdt":     since_date,
+                        "hits.hits.total.value": 1,
+                    },
+                    headers={
+                        "User-Agent":  "rd-engine-research/1.0 research@example.com",
+                        "Accept":      "application/json",
+                    },
+                )
+                if not resp:
+                    continue
+
+                data = resp.json()
+                hits = data.get("hits", {}).get("hits", [])
+
+                for hit in hits[:2]:  # מקסימום 2 דוחות לכל שילוב
+                    src = hit.get("_source", {})
+                    # חלץ את הקטע הרלוונטי מתוך הדוח
+                    highlight = hit.get("highlight", {})
+                    snippets  = []
+                    for field_hits in highlight.values():
+                        snippets.extend(field_hits[:2])
+                    snippet = " [...] ".join(snippets)[:600] if snippets else ""
+
+                    filing_date = src.get("file_date", "")
+                    form_type   = src.get("form_type", "")
+                    entity      = src.get("display_names", [{}])
+                    entity_name = entity[0].get("name", company_name) if entity else company_name
+                    accession   = src.get("accession_no", "").replace("-", "")
+                    filing_url  = (
+                        f"https://www.sec.gov/Archives/edgar/data/"
+                        f"{src.get('entity_id','')}/{accession}/"
+                        if accession else "https://www.sec.gov/cgi-bin/browse-edgar"
+                    )
+
+                    if not snippet and not form_type:
+                        continue
+
+                    results.append({
+                        "title":       f"[{form_type}] {entity_name} — {kw}",
+                        "abstract":    snippet or f"{entity_name} mentions '{kw}' in {form_type} filing.",
+                        "url":         filing_url,
+                        "company":     entity_name,
+                        "keyword":     kw,
+                        "filing_date": filing_date,
+                        "form_type":   form_type,
+                        "source":      "sec_edgar",
+                        "signal_type": "regulatory_filing",
+                    })
+
+                time.sleep(0.3)  # EDGAR לא דורש delay, אבל נהיה מנומסים
+
+            except Exception as e:
+                logger.debug(f"[EDGAR] Query failed ({company_name} + {kw}): {e}")
+                continue
+
+            if len(results) >= max_results:
+                break
+        if len(results) >= max_results:
+            break
+
+    logger.info(f"[EDGAR] Fetched {len(results)} SEC filing signals")
+    return results
+
+
+# ── DARPA BAA ─────────────────────────────────────────────────────────────────
+# DARPA מפרסמת Broad Agency Announcements — רשימת הבעיות הטכניות הכי קשות
+# שהממשלה האמריקאית מוכנה לממן פתרונות עבורן.
+# זה 2-3 שנים לפני השוק — מוקדם יותר מ-OSTI.
+# API: SAM.gov — מערכת רכש פדרלית. DEMO_KEY חינמי (1000 req/יום).
+
+SAM_DEMO_KEY = "DEMO_KEY"  # עובד ללא רישום עד 1000 בקשות ביום
+                            # לרישום חינמי לקיבולת גבוהה יותר: sam.gov
+
+DARPA_RELEVANT_KEYWORDS = [
+    "semiconductor", "computing", "microelectronics", "photonics",
+    "thermal", "power", "memory", "bandwidth", "processor",
+    "packaging", "chiplet", "accelerator", "neural", "ai",
+]
+
+
+def fetch_darpa_baa_signals(
+    keywords: list[str] = None,
+    max_results: int = 10,
+    days_back: int = 365,
+) -> list[dict]:
+    """
+    מאחזר BAA (Broad Agency Announcements) של DARPA מ-SAM.gov.
+    BAA = בעיות שהממשלה האמריקאית משלמת לפתור — אינטל 2-3 שנים קדימה.
+    DEMO_KEY חינמי (sam.gov) — ללא רישום עד 1000 req/יום.
+    לקיבולת גבוהה יותר: הירשם ב-sam.gov וקבל key חינמי אמיתי.
+    Optional env var: SAM_GOV_API_KEY
+    """
+    import os
+    results  = []
+    api_key  = os.environ.get("SAM_GOV_API_KEY", SAM_DEMO_KEY)
+    kw_filter = [k.lower() for k in (keywords or DARPA_RELEVANT_KEYWORDS)]
+    since_date = (datetime.now() - timedelta(days=days_back)).strftime("%m/%d/%Y")
+    today_str  = datetime.now().strftime("%m/%d/%Y")
+
+    try:
+        resp = _safe_get(
+            "https://api.sam.gov/opportunities/v2/search",
+            params={
+                "api_key":      api_key,
+                "ptype":        "o",           # o = solicitation (BAA נכלל כאן)
+                "deptname":     "Defense Advanced Research Projects Agency",
+                "postedFrom":   since_date,
+                "postedTo":     today_str,
+                "limit":        max_results * 2,  # נסנן אחר כך
+                "offset":       0,
+            },
+            headers={"User-Agent": "rd-engine-research/1.0"},
+        )
+
+        if not resp:
+            return []
+
+        data = resp.json()
+        opportunities = data.get("opportunitiesData", [])
+
+        for opp in opportunities:
+            title       = opp.get("title", "")
+            description = (opp.get("description") or "")[:600]
+            sol_number  = opp.get("solicitationNumber", "")
+            posted_date = opp.get("postedDate", "")
+            opp_type    = opp.get("typeOfSetAside", "") or opp.get("type", "")
+            ui_link     = opp.get("uiLink", "")
+            if not ui_link:
+                ui_link = f"https://sam.gov/opp/{opp.get('noticeId','')}/view"
+
+            # סנן רק הזדמנויות שרלוונטיות לתחום
+            combined = (title + " " + description).lower()
+            if not any(kw in combined for kw in kw_filter):
+                continue
+
+            results.append({
+                "title":         f"[DARPA BAA] {title}",
+                "abstract":      description or f"DARPA solicitation: {title}",
+                "url":           ui_link,
+                "sol_number":    sol_number,
+                "posted_date":   posted_date,
+                "opp_type":      opp_type,
+                "source":        "darpa_baa",
+                "signal_type":   "government_funding_signal",
+            })
+
+            if len(results) >= max_results:
+                break
+
+    except Exception as e:
+        logger.warning(f"[DARPA] SAM.gov fetch failed: {e}")
+
+    logger.info(f"[DARPA] Fetched {len(results)} DARPA BAA signals")
     return results

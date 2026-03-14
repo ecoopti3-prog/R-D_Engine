@@ -33,10 +33,12 @@ def _client(llm_cfg: dict) -> OpenAI:
     )
 
 
-def _call_single(llm_cfg: dict, system_prompt: str, user_prompt: str) -> tuple[str, int, int, int]:
+def _call_single(llm_cfg: dict, system_prompt: str, user_prompt: str,
+                 force_json: bool = False) -> tuple[str, int, int, int]:
     """One LLM call. Returns (raw_text, tokens_in, tokens_out, total_tokens). Raises on error."""
     client = _client(llm_cfg)
-    resp = client.chat.completions.create(
+
+    kwargs = dict(
         model=llm_cfg["model"],
         max_tokens=llm_cfg.get("max_tokens", MAX_TOKENS),
         temperature=llm_cfg.get("temperature", 0.3),
@@ -45,6 +47,14 @@ def _call_single(llm_cfg: dict, system_prompt: str, user_prompt: str) -> tuple[s
             {"role": "user",   "content": user_prompt},
         ],
     )
+
+    # Native JSON mode — supported by Groq, Gemini (via openai-compat), Mistral, Fireworks.
+    # Forces the model to emit valid JSON without Markdown wrapping.
+    # SambaNova and Cohere may not honour this; they fall back gracefully via _parse_json.
+    if force_json and llm_cfg.get("supports_json_mode", True):
+        kwargs["response_format"] = {"type": "json_object"}
+
+    resp = client.chat.completions.create(**kwargs)
     text = resp.choices[0].message.content or ""
     tokens_in  = resp.usage.prompt_tokens if resp.usage else 0
     tokens_out = resp.usage.completion_tokens if resp.usage else 0
@@ -87,7 +97,10 @@ def call_llm(
         logger.info(f"[Router] Trying {name}")
 
         try:
-            text, tok_in, tok_out, total = _call_single(llm_cfg, system_prompt, user_prompt)
+            text, tok_in, tok_out, total = _call_single(
+                llm_cfg, system_prompt, user_prompt,
+                force_json=expect_json,
+            )
         except RateLimitError:
             logger.warning(f"[Router] {name} → 429 Rate Limit — next LLM")
             continue
@@ -96,7 +109,10 @@ def call_llm(
                 logger.warning(f"[Router] {name} → 400 context too long — compressing")
                 user_prompt = user_prompt[:int(len(user_prompt) * 0.6)] + "\n[TRUNCATED]"
                 try:
-                    text, tok_in, tok_out, total = _call_single(llm_cfg, system_prompt, user_prompt)
+                    text, tok_in, tok_out, total = _call_single(
+                        llm_cfg, system_prompt, user_prompt,
+                        force_json=expect_json,
+                    )
                 except Exception as inner:
                     logger.warning(f"[Router] {name} failed after compress: {inner}")
                     continue
@@ -110,7 +126,10 @@ def call_llm(
             logger.warning(f"[Router] {name} → timeout — retrying once")
             time.sleep(5)
             try:
-                text, tok_in, tok_out, total = _call_single(llm_cfg, system_prompt, user_prompt)
+                text, tok_in, tok_out, total = _call_single(
+                    llm_cfg, system_prompt, user_prompt,
+                    force_json=expect_json,
+                )
             except Exception:
                 logger.warning(f"[Router] {name} → timeout on retry — next LLM")
                 continue
@@ -133,7 +152,10 @@ def call_llm(
                     + "\n\nCRITICAL: Return ONLY valid JSON. No markdown, no backticks. Start with {{ end with }}."
                 )
                 try:
-                    text2, tok_in2, tok_out2, total2 = _call_single(llm_cfg, strict_system, user_prompt)
+                    text2, tok_in2, tok_out2, total2 = _call_single(
+                        llm_cfg, strict_system, user_prompt,
+                        force_json=True,
+                    )
                     parsed = _parse_json(text2)
                     logger.info(f"[Router] {name} OK after JSON fix ({total2} tokens)")
                     if name == "gemini":
