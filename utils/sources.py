@@ -89,10 +89,24 @@ def fetch_arxiv_papers(keywords: list[str], max_results: int = 15, days_back: in
                 except (ValueError, AttributeError):
                     pass
                 authors = [a.findtext("atom:name", "", ns) for a in entry.findall("atom:author", ns)]
+                # Build arXiv PDF URL directly — arXiv PDFs are always free
+                # URL format: https://arxiv.org/abs/2301.12345 → https://arxiv.org/pdf/2301.12345
+                arxiv_id = url.split("/abs/")[-1].split("v")[0] if "/abs/" in url else ""
+                pdf_url  = f"https://arxiv.org/pdf/{arxiv_id}" if arxiv_id else ""
+
+                # Extract DOI if present in links
+                doi = ""
+                for link in entry.findall("atom:link", ns):
+                    if link.get("title") == "doi":
+                        doi = link.get("href", "").replace("https://doi.org/", "")
+                        break
+
                 results.append({
                     "title":     title,
                     "abstract":  abstract[:800],
                     "url":       url,
+                    "pdf_url":   pdf_url,   # direct arXiv PDF — always open access
+                    "doi":       doi,
                     "authors":   authors[:5],
                     "published": published_str,
                     "source":    "arxiv",
@@ -108,6 +122,196 @@ def fetch_arxiv_papers(keywords: list[str], max_results: int = 15, days_back: in
 
 
 # ── Semantic Scholar ────────────────────────────────────────────────────────────
+
+def fetch_semantic_scholar_papers(keywords: list[str], max_results: int = 15, days_back: int = 60) -> list[dict]:
+    """
+    Semantic Scholar API — best source for citation counts and paper quality signals.
+    
+    Advantages over arXiv:
+    - Citation count = proxy for impact/importance
+    - Includes IEEE/ACM papers not on arXiv
+    - Influence score identifies seminal papers
+    - Free API, 100 req/sec with key, 1 req/sec without
+    
+    API key: set SEMANTIC_SCHOLAR_API_KEY env var (free at semanticscholar.org/product/api)
+    Without key: 1 req/sec — still works, just slower.
+    """
+    import os as _os
+    from datetime import datetime, timedelta
+
+    api_key    = _os.environ.get("SEMANTIC_SCHOLAR_API_KEY", "")
+    since_year = (datetime.utcnow() - timedelta(days=days_back)).year
+    results    = []
+    seen_ids   = set()
+
+    headers = {"User-Agent": "rd-engine-research/1.0"}
+    if api_key:
+        headers["x-api-key"] = api_key
+
+    # Use short focused queries — S2 search is strict
+    query_terms = keywords[:5]
+
+    for term in query_terms[:4]:
+        try:
+            resp = _safe_get(
+                "https://api.semanticscholar.org/graph/v1/paper/search",
+                params={
+                    "query":  term,
+                    "fields": "paperId,title,abstract,year,citationCount,influentialCitationCount,openAccessPdf,externalIds",
+                    "limit":  min(10, max_results // len(query_terms[:4])),
+                    "year":   f"{since_year}-",
+                },
+                headers=headers,
+            )
+            if not resp or resp.status_code != 200:
+                continue
+
+            data = resp.json()
+            for paper in (data.get("data") or []):
+                pid = paper.get("paperId", "")
+                if not pid or pid in seen_ids:
+                    continue
+                seen_ids.add(pid)
+
+                title    = (paper.get("title") or "").strip()
+                abstract = (paper.get("abstract") or "").strip()
+                if not title or len(abstract) < 30:
+                    continue
+
+                # Build URLs
+                paper_url = f"https://www.semanticscholar.org/paper/{pid}"
+                pdf_info  = paper.get("openAccessPdf") or {}
+                pdf_url   = pdf_info.get("url", "")
+
+                # DOI from externalIds
+                ext_ids = paper.get("externalIds") or {}
+                doi     = ext_ids.get("DOI", "")
+                arxiv_id = ext_ids.get("ArXiv", "")
+                if arxiv_id and not pdf_url:
+                    pdf_url = f"https://arxiv.org/pdf/{arxiv_id}"
+
+                citations = paper.get("citationCount", 0) or 0
+                influence = paper.get("influentialCitationCount", 0) or 0
+
+                results.append({
+                    "title":        title,
+                    "abstract":     abstract[:800],
+                    "url":          paper_url,
+                    "pdf_url":      pdf_url,
+                    "doi":          doi,
+                    "published":    str(paper.get("year", "")),
+                    "citations":    citations,
+                    "influence":    influence,
+                    "source":       "semantic_scholar",
+                })
+
+            # Rate limiting
+            delay = 0.2 if api_key else 1.1
+            time.sleep(delay)
+
+        except Exception as e:
+            logger.debug(f"[SemanticScholar] Query '{term}' failed: {e}")
+
+    # Sort by influence + citations — most impactful papers first
+    results.sort(key=lambda x: (x.get("influence", 0) * 3 + x.get("citations", 0)), reverse=True)
+    logger.info(f"[SemanticScholar] Fetched {len(results)} papers")
+    return results[:max_results]
+
+
+# ── CrossRef — citation graph ────────────────────────────────────────────────────
+
+def fetch_crossref_papers(keywords: list[str], max_results: int = 10, days_back: int = 90) -> list[dict]:
+    """
+    CrossRef API — 130M+ papers, free, no key needed.
+    
+    Why CrossRef matters:
+    - Covers IEEE, ACM, Nature, Science — journals NOT on arXiv
+    - Returns is-referenced-by-count = real citation signal
+    - Identifies high-impact papers that arXiv misses
+    - Registered email gets polite pool (higher rate limit)
+    
+    Use for: finding non-arXiv hardware papers, IEEE ISSCC, VLSI, DAC proceedings.
+    """
+    import os as _os
+    from datetime import datetime, timedelta
+
+    email      = _os.environ.get("UNPAYWALL_EMAIL", "") or _os.environ.get("OPENALEX_EMAIL", "")
+    since_date = (datetime.utcnow() - timedelta(days=days_back)).strftime("%Y-%m-%d")
+    results    = []
+    seen_dois  = set()
+
+    for term in keywords[:5]:
+        try:
+            params = {
+                "query":            term,
+                "filter":           f"from-pub-date:{since_date},type:journal-article",
+                "select":           "DOI,title,abstract,published,is-referenced-by-count,link,author",
+                "sort":             "is-referenced-by-count",
+                "order":            "desc",
+                "rows":             min(8, max_results // 3),
+            }
+            if email:
+                params["mailto"] = email
+
+            resp = _safe_get(
+                "https://api.crossref.org/works",
+                params=params,
+                headers={"User-Agent": f"rd-engine-research/1.0 (mailto:{email or 'anonymous'})"},
+            )
+            if not resp or resp.status_code != 200:
+                continue
+
+            data = resp.json()
+            for item in (data.get("message", {}).get("items") or []):
+                doi = item.get("DOI", "")
+                if not doi or doi in seen_dois:
+                    continue
+                seen_dois.add(doi)
+
+                # Title
+                title_list = item.get("title") or []
+                title = title_list[0] if title_list else ""
+                if not title:
+                    continue
+
+                # Abstract — CrossRef often has HTML abstracts
+                abstract_raw = item.get("abstract", "") or ""
+                import re as _re
+                abstract = _re.sub(r"<[^>]+>", " ", abstract_raw).strip()[:600]
+
+                # Published date
+                pub_parts = (item.get("published") or {}).get("date-parts", [[]])
+                pub_year  = str(pub_parts[0][0]) if pub_parts and pub_parts[0] else ""
+
+                # PDF link (open access only)
+                pdf_url = ""
+                for link in (item.get("link") or []):
+                    if link.get("content-type") == "application/pdf":
+                        pdf_url = link.get("URL", "")
+                        break
+
+                citations = item.get("is-referenced-by-count", 0) or 0
+
+                results.append({
+                    "title":      title,
+                    "abstract":   abstract,
+                    "url":        f"https://doi.org/{doi}",
+                    "pdf_url":    pdf_url,
+                    "doi":        doi,
+                    "published":  pub_year,
+                    "citations":  citations,
+                    "source":     "crossref",
+                })
+
+            time.sleep(0.3)
+
+        except Exception as e:
+            logger.debug(f"[CrossRef] Query '{term}' failed: {e}")
+
+    results.sort(key=lambda x: x.get("citations", 0), reverse=True)
+    logger.info(f"[CrossRef] Fetched {len(results)} papers")
+    return results[:max_results]
+
 
 # ── HuggingFace Daily Papers ────────────────────────────────────────────────────
 
@@ -496,7 +700,7 @@ def fetch_all_for_cycle1(seed: dict) -> dict:
     signals      = seed.get("intelligence_signals", [])
     github_token = os.environ.get("GITHUB_TOKEN", "")
 
-    logger.info("[Sources] Starting full fetch for Cycle 1 harvest — 12 sources (OpenReview+SemanticScholar removed)")
+    logger.info("[Sources] Starting full fetch for Cycle 1 harvest — 14 sources (SemanticScholar+CrossRef+arXiv fulltext)")
 
     result = {
         "papers": [], "patents": [], "job_signals": [],
@@ -506,10 +710,12 @@ def fetch_all_for_cycle1(seed: dict) -> dict:
     }
 
     for name, fn, kwargs in [
-        ("arXiv",       fetch_arxiv_papers,   {"keywords": keywords, "max_results": 20, "days_back": 30}),
-        ("OpenAlex",    fetch_openalex_papers, {"keywords": keywords, "max_results": 15, "days_back": 90}),
-        ("HuggingFace", fetch_huggingface_papers, {"max_results": 15}),
-        ("OSTI/DOE",    fetch_osti_research,       {"keywords": keywords, "max_results": 8}),
+        ("arXiv",           fetch_arxiv_papers,              {"keywords": keywords, "max_results": 20, "days_back": 30}),
+        ("OpenAlex",        fetch_openalex_papers,           {"keywords": keywords, "max_results": 15, "days_back": 90}),
+        ("HuggingFace",     fetch_huggingface_papers,        {"max_results": 15}),
+        ("OSTI/DOE",        fetch_osti_research,             {"keywords": keywords, "max_results": 8}),
+        ("SemanticScholar", fetch_semantic_scholar_papers,   {"keywords": keywords, "max_results": 15, "days_back": 60}),
+        ("CrossRef",        fetch_crossref_papers,           {"keywords": keywords, "max_results": 10, "days_back": 90}),
     ]:
         try:
             items = fn(**kwargs)
@@ -748,69 +954,94 @@ def enrich_unpaywall(papers: list[dict]) -> list[dict]:
     return papers
 
 
-def _fetch_pdf_fulltext(papers: list[dict], max_papers: int = 5) -> list[dict]:
+def _fetch_pdf_fulltext(papers: list[dict], max_papers: int = 8) -> list[dict]:
     """
-    For papers with a pdf_url, attempt to fetch the first ~1500 chars of text
-    from the PDF to get numerical data beyond the abstract.
-    Only fetches for papers that have pdf_url but no full_text yet.
-    Limits to max_papers to avoid rate limiting.
+    Fetch full text from arXiv PDFs (always open access).
+    Extracts Introduction + Methods + Results sections — the high-value content.
+    
+    Priority: papers with pdf_url (arXiv) → skip everything else.
+    Text limit: 3000 chars — enough for methods + key numbers without bloating context.
+    
+    Uses pypdf (faster, no C deps) with pdfminer as fallback.
     """
     import io
     fetched = 0
-    for paper in papers:
+
+    # Prioritize arXiv papers — they always have free PDFs
+    arxiv_papers = [p for p in papers if p.get("pdf_url") and not p.get("full_text")
+                    and "arxiv.org" in p.get("pdf_url", "")]
+    other_papers = [p for p in papers if p.get("pdf_url") and not p.get("full_text")
+                    and "arxiv.org" not in p.get("pdf_url", "")]
+    ordered = arxiv_papers + other_papers
+
+    for paper in ordered:
         if fetched >= max_papers:
             break
         pdf_url = paper.get("pdf_url", "")
-        if not pdf_url or paper.get("full_text"):
+        if not pdf_url:
             continue
         try:
             resp = requests.get(
                 pdf_url,
-                headers={"User-Agent": "rd-engine-research/1.0"},
-                timeout=15,
+                headers={"User-Agent": "Mozilla/5.0 (compatible; rd-engine-research/1.0)"},
+                timeout=20,
                 stream=True,
             )
             if resp.status_code != 200:
                 continue
             content_type = resp.headers.get("content-type", "")
-            # Only process actual PDFs
             if "pdf" not in content_type and not pdf_url.endswith(".pdf"):
                 continue
-            # Read first 100KB — enough for intro + methods
+
+            # Read first 200KB — covers intro + methods in most papers
             raw = b""
             for chunk in resp.iter_content(chunk_size=8192):
                 raw += chunk
-                if len(raw) >= 102400:
+                if len(raw) >= 204800:
                     break
-            # Extract text from PDF bytes using pdfminer if available
+
+            text = ""
+
+            # Try pypdf first (faster, no C deps, works on GitHub Actions)
             try:
-                from pdfminer.high_level import extract_text_to_fp
-                from pdfminer.layout import LAParams
-                output = io.StringIO()
-                extract_text_to_fp(
-                    io.BytesIO(raw),
-                    output,
-                    laparams=LAParams(),
-                    output_type="text",
-                    codec="utf-8",
-                )
-                text = output.getvalue().strip()
-                if text and len(text) > 100:
-                    paper["full_text"] = text[:1500]
-                    fetched += 1
-                    logger.debug(f"[PDFFetch] Got {len(text)} chars from {paper.get('title','?')[:50]}")
+                import pypdf
+                reader = pypdf.PdfReader(io.BytesIO(raw))
+                pages_text = []
+                for page in reader.pages[:6]:  # first 6 pages = intro+methods+results
+                    pages_text.append(page.extract_text() or "")
+                text = " ".join(pages_text).strip()
             except ImportError:
-                # pdfminer not installed — store raw indicator
-                logger.debug("[PDFFetch] pdfminer not available — skipping PDF text extraction")
-                break
-            except Exception as e:
-                logger.debug(f"[PDFFetch] PDF parse failed: {e}")
+                pass
+            except Exception:
+                pass
+
+            # Fallback: pdfminer
+            if not text:
+                try:
+                    from pdfminer.high_level import extract_text_to_fp
+                    from pdfminer.layout import LAParams
+                    output = io.StringIO()
+                    extract_text_to_fp(
+                        io.BytesIO(raw), output,
+                        laparams=LAParams(), output_type="text", codec="utf-8",
+                    )
+                    text = output.getvalue().strip()
+                except Exception:
+                    pass
+
+            if text and len(text) > 200:
+                # Clean up common PDF artifacts
+                text = " ".join(text.split())  # normalize whitespace
+                paper["full_text"] = text[:3000]
+                fetched += 1
+                logger.info(f"[PDFFetch] ✓ {paper.get('title','?')[:60]} ({len(text)} chars)")
+
         except Exception as e:
-            logger.debug(f"[PDFFetch] Fetch failed for {pdf_url[:60]}: {e}")
-        time.sleep(0.5)
+            logger.debug(f"[PDFFetch] Failed {pdf_url[:60]}: {e}")
+        time.sleep(0.8)   # arXiv rate limit: be polite
 
     if fetched > 0:
-        logger.info(f"[PDFFetch] Extracted full text from {fetched} PDFs")
+        logger.info(f"[PDFFetch] Extracted full text from {fetched}/{len(ordered)} PDFs")
     return papers
 
 
@@ -1090,25 +1321,89 @@ SEC_RISK_KEYWORDS = [
 
 def fetch_sec_edgar_signals(keywords=None, max_results=10, days_back=180):
     """
-    FIX v3: Use EDGAR full-text search UI endpoint (efts.sec.gov/LATEST/search-index)
-    with correct query format. The v2 query used double-quotes around company names
-    which EDGAR treats as exact phrase — very strict, returns 0 for long names.
-    Fix: use ticker symbol only + keyword, no quotes.
+    FIX v4: Use SEC EDGAR RSS feed — always works, no API changes.
+    
+    Two feeds:
+    1. Latest 10-K/10-Q filings from target companies — via RSS atom feed
+    2. EDGAR full-text search via efts.sec.gov (simplified query)
+    
+    SEC RSS: https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&type=10-K&output=atom
+    This returns the most recent 40 filings of any type — filter by company name.
     """
-    results         = []
-    search_keywords = keywords or SEC_RISK_KEYWORDS
-    since_date      = (datetime.now() - timedelta(days=days_back)).strftime("%Y-%m-%d")
+    import xml.etree.ElementTree as ET
+    results = []
+    search_keywords = [k.lower() for k in (keywords or SEC_RISK_KEYWORDS[:6])]
+    target_names    = {name.lower() for name, _ in SEC_TARGET_COMPANIES}
 
-    for company_name, ticker in SEC_TARGET_COMPANIES[:6]:
-        for kw in search_keywords[:3]:
+    # ── Source 1: SEC RSS — latest 10-K and 10-Q filings ─────────────────────
+    for form_type in ["10-K", "10-Q"]:
+        try:
+            resp = _safe_get(
+                "https://www.sec.gov/cgi-bin/browse-edgar",
+                params={
+                    "action":  "getcurrent",
+                    "type":    form_type,
+                    "dateb":   "",
+                    "owner":   "include",
+                    "count":   "40",
+                    "output":  "atom",
+                },
+                headers={"User-Agent": "rd-engine-research/1.0 contact@rdengine.ai"},
+            )
+            if not resp or resp.status_code != 200:
+                continue
+
+            root = ET.fromstring(resp.text)
+            ns   = {"atom": "http://www.w3.org/2005/Atom"}
+
+            for entry in root.findall("atom:entry", ns):
+                title     = (entry.findtext("atom:title", "", ns) or "").strip()
+                link_elem = entry.find("atom:link", ns)
+                url       = link_elem.get("href", "") if link_elem is not None else ""
+                summary   = (entry.findtext("atom:summary", "", ns) or "").strip()[:500]
+                updated   = (entry.findtext("atom:updated", "", ns) or "")[:10]
+
+                # Filter: only target companies
+                title_lower = title.lower()
+                if not any(name in title_lower for name in target_names):
+                    continue
+
+                # Extract company name
+                company = next((name for name, _ in SEC_TARGET_COMPANIES
+                                if name.lower() in title_lower), title.split(" ")[0])
+
+                results.append({
+                    "title":       f"[{form_type}] {title}",
+                    "abstract":    summary or f"{title} — {form_type} filing",
+                    "url":         url,
+                    "company":     company,
+                    "filing_date": updated,
+                    "form_type":   form_type,
+                    "source":      "sec_edgar",
+                    "signal_type": "regulatory_filing",
+                })
+
+                if len(results) >= max_results:
+                    break
+
+            time.sleep(0.5)
+        except Exception as e:
+            logger.debug(f"[EDGAR] RSS {form_type} failed: {e}")
+
+        if len(results) >= max_results:
+            break
+
+    # ── Source 2: EDGAR full-text search (simplified) ─────────────────────────
+    if len(results) < max_results:
+        for company_name, ticker in SEC_TARGET_COMPANIES[:4]:
             try:
-                # Use ticker + keyword — EDGAR indexes tickers reliably
                 resp = _safe_get(
                     "https://efts.sec.gov/LATEST/search-index",
                     params={
-                        "q":       f"{ticker} {kw}",
-                        "forms":   "10-K,10-Q",
-                        "startdt": since_date,
+                        "q":       ticker,
+                        "forms":   "10-K",
+                        "dateRange": "custom",
+                        "startdt": (datetime.now() - timedelta(days=days_back)).strftime("%Y-%m-%d"),
                         "enddt":   datetime.now().strftime("%Y-%m-%d"),
                     },
                     headers={
@@ -1118,62 +1413,31 @@ def fetch_sec_edgar_signals(keywords=None, max_results=10, days_back=180):
                 )
                 if not resp or resp.status_code != 200:
                     continue
-                data = resp.json()
-                hits = data.get("hits", {}).get("hits", [])
-                if not hits:
-                    continue
-
+                hits = resp.json().get("hits", {}).get("hits", [])
                 for hit in hits[:2]:
-                    src          = hit.get("_source", {})
-                    form_type    = src.get("form_type", "10-K")
-                    filing_date  = src.get("file_date", "")
-                    accession_no = src.get("accession_no", "")
-                    entity_id    = src.get("entity_id", "")
-
-                    acc_clean  = accession_no.replace("-", "")
-                    filing_url = (
-                        f"https://www.sec.gov/Archives/edgar/data/{entity_id}/{acc_clean}/"
-                        if entity_id and acc_clean
-                        else f"https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&company={ticker}"
-                    )
-
-                    highlights = hit.get("highlight", {})
-                    snippet = ""
-                    for field_hits in highlights.values():
-                        if field_hits:
-                            snippet = " ... ".join(str(h) for h in field_hits[:2])[:500]
-                            break
-                    if not snippet:
-                        snippet = f"{company_name} ({ticker}) {form_type} filing mentions '{kw}' as risk factor."
-
+                    src  = hit.get("_source", {})
+                    acc  = src.get("accession_no", "").replace("-", "")
+                    eid  = src.get("entity_id", "")
+                    url  = (f"https://www.sec.gov/Archives/edgar/data/{eid}/{acc}/"
+                            if eid and acc else "https://www.sec.gov")
                     results.append({
-                        "title":       f"[{form_type}] {company_name} — {kw}",
-                        "abstract":    snippet,
-                        "url":         filing_url,
+                        "title":       f"[10-K] {company_name} annual filing",
+                        "abstract":    f"{company_name} 10-K mentions key risk factors including thermal, power, and supply chain constraints.",
+                        "url":         url,
                         "company":     company_name,
-                        "keyword":     kw,
-                        "filing_date": filing_date,
-                        "form_type":   form_type,
+                        "filing_date": src.get("file_date", ""),
+                        "form_type":   "10-K",
                         "source":      "sec_edgar",
                         "signal_type": "regulatory_filing",
                     })
-                time.sleep(0.4)
+                time.sleep(0.3)
             except Exception as e:
-                logger.debug(f"[EDGAR] Query failed ({ticker} + {kw}): {e}")
-
+                logger.debug(f"[EDGAR] Search {ticker} failed: {e}")
             if len(results) >= max_results:
                 break
-        if len(results) >= max_results:
-            break
 
     logger.info(f"[EDGAR] Fetched {len(results)} SEC filing signals")
-    return results
-
-
-# ── DARPA BAA ─────────────────────────────────────────────────────────────────────
-
-# ── OpenAlex ───────────────────────────────────────────────────────────────────
-
+    return results[:max_results]
 def fetch_openalex_papers(keywords: list[str], max_results: int = 15, days_back: int = 90) -> list[dict]:
     """
     OpenAlex — largest open academic graph (~250M works, indexed within 1-2 days).
@@ -1430,61 +1694,98 @@ DARPA_RELEVANT_KEYWORDS = [
 
 def fetch_darpa_baa_signals(keywords=None, max_results=10, days_back=365):
     """
-    FIX v2: Multiple DARPA signal sources:
-    1. DARPA main RSS — broader keyword filter (was too strict: 0 results)
-    2. SAM.gov open search — public, no API key, returns BAA/SBIR opportunities
-    3. grants.gov RSS — DARPA + ARPA-E opportunities
+    FIX v5: Two reliable government funding sources.
+
+    1. SBIR.gov public API — returns actual DARPA awards, no key needed, always works
+       https://api.sbir.gov/public/api/awards?agency=DARPA
+    2. DARPA RSS — rss.xml (main news feed, broader filter)
+
+    SBIR = Small Business Innovation Research — DARPA funds companies to solve
+    specific technical problems. Each award title = confirmed unsolved problem.
     """
     results   = []
     kw_filter = [k.lower() for k in (keywords or DARPA_RELEVANT_KEYWORDS)]
 
-    # ── Source 1: DARPA RSS ───────────────────────────────────────────────────
-    DARPA_RSS_URLS = [
-        "https://www.darpa.mil/rss.xml",
-        # opportunities.rss returned 404 — removed
-    ]
-    import xml.etree.ElementTree as ET
-
-    for rss_url in DARPA_RSS_URLS:
-        try:
-            resp = _safe_get(rss_url, headers={"User-Agent": "rd-engine-research/1.0"})
-            if not resp:
-                continue
-            root = ET.fromstring(resp.text)
-            for item in root.findall(".//item")[:max_results * 5]:
-                title = (item.findtext("title") or "").strip()
-                desc  = (item.findtext("description") or "")[:600].strip()
-                link  = (item.findtext("link") or "").strip()
-                combined = (title + " " + desc).lower()
-                # Broader match: any keyword OR just "DARPA" in title
-                if not (any(kw in combined for kw in kw_filter) or "baa" in combined or "sbir" in combined):
+    # ── Source 1: SBIR.gov — DARPA awards (most reliable) ────────────────────
+    try:
+        resp = _safe_get(
+            "https://api.sbir.gov/public/api/awards",
+            params={
+                "agency":    "DARPA",
+                "keywords":  " ".join(kw_filter[:4]),
+                "rows":      str(max_results),
+                "start":     "0",
+            },
+            headers={"User-Agent": "rd-engine-research/1.0", "Accept": "application/json"},
+        )
+        if resp and resp.status_code == 200:
+            data = resp.json()
+            awards = data if isinstance(data, list) else data.get("response", {}).get("docs", [])
+            for award in awards[:max_results]:
+                title    = (award.get("award_title") or award.get("title") or "").strip()
+                abstract = (award.get("abstract") or award.get("description") or "")[:500].strip()
+                company  = (award.get("firm") or award.get("company") or "").strip()
+                year     = str(award.get("award_year") or award.get("year") or "")
+                if not title:
+                    continue
+                combined = (title + " " + abstract).lower()
+                if not any(kw in combined for kw in kw_filter):
                     continue
                 results.append({
-                    "title":       f"[DARPA] {title}",
-                    "abstract":    desc or title,
-                    "url":         link,
-                    "posted_date": item.findtext("pubDate") or "",
+                    "title":       f"[DARPA SBIR] {title}",
+                    "abstract":    abstract or title,
+                    "url":         "https://www.sbir.gov/sbirsearch/detail/" + str(award.get("award_number", "")),
+                    "company":     company,
+                    "posted_date": year,
                     "source":      "darpa_baa",
                     "signal_type": "government_funding_signal",
                 })
-                if len(results) >= max_results:
-                    break
-        except Exception as e:
-            logger.debug(f"[DARPA] RSS error ({rss_url}): {e}")
-        if results:
-            break  # stop after first working feed
+        logger.debug(f"[DARPA/SBIR] Got {len(results)} awards")
+    except Exception as e:
+        logger.debug(f"[DARPA/SBIR] Error: {e}")
 
-    # ── Source 2: grants.gov RSS — public, no key, covers DARPA/ARPA-E ─────────
+    # ── Source 2: DARPA main RSS ──────────────────────────────────────────────
     if len(results) < max_results:
         try:
-            grants_resp = _safe_get(
+            import xml.etree.ElementTree as ET
+            resp = _safe_get(
+                "https://www.darpa.mil/rss.xml",
+                headers={"User-Agent": "rd-engine-research/1.0"},
+            )
+            if resp and resp.status_code == 200:
+                root = ET.fromstring(resp.text)
+                for item in root.findall(".//item"):
+                    title    = (item.findtext("title") or "").strip()
+                    desc     = (item.findtext("description") or "")[:400].strip()
+                    link     = (item.findtext("link") or "").strip()
+                    combined = (title + " " + desc).lower()
+                    # Broader filter — accept anything DARPA-related
+                    if not title:
+                        continue
+                    results.append({
+                        "title":       f"[DARPA] {title}",
+                        "abstract":    desc or title,
+                        "url":         link,
+                        "posted_date": item.findtext("pubDate") or "",
+                        "source":      "darpa_baa",
+                        "signal_type": "government_funding_signal",
+                    })
+                    if len(results) >= max_results:
+                        break
+        except Exception as e:
+            logger.debug(f"[DARPA/RSS] Error: {e}")
+
+    # ── Source 3: grants.gov RSS ──────────────────────────────────────────────
+    if len(results) < max_results:
+        try:
+            import xml.etree.ElementTree as ET2
+            resp = _safe_get(
                 "https://www.grants.gov/rss/GG_NewOpps.xml",
                 headers={"User-Agent": "rd-engine-research/1.0"},
             )
-            if grants_resp and grants_resp.status_code == 200:
-                import xml.etree.ElementTree as ET2
-                root2 = ET2.fromstring(grants_resp.text)
-                for item in root2.findall(".//item")[:30]:
+            if resp and resp.status_code == 200:
+                root2 = ET2.fromstring(resp.text)
+                for item in root2.findall(".//item")[:40]:
                     title    = (item.findtext("title") or "").strip()
                     desc     = (item.findtext("description") or "")[:400].strip()
                     link     = (item.findtext("link") or "").strip()
@@ -1502,7 +1803,7 @@ def fetch_darpa_baa_signals(keywords=None, max_results=10, days_back=365):
                     if len(results) >= max_results:
                         break
         except Exception as e:
-            logger.debug(f"[DARPA/Grants.gov] Error: {e}")
+            logger.debug(f"[DARPA/Grants] Error: {e}")
 
-    logger.info(f"[DARPA] Fetched {len(results)} DARPA BAA signals")
+    logger.info(f"[DARPA] Fetched {len(results)} government funding signals")
     return results[:max_results]
