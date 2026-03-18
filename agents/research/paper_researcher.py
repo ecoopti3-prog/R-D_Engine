@@ -110,22 +110,49 @@ class PaperResearcher(BaseAgent):
             )
 
         # -- Format papers for analysis ----------------------------------------
+        # Sort: full-text papers first, then by citations (highest impact first)
+        sorted_papers = sorted(
+            papers,
+            key=lambda p: (
+                bool(p.get("full_text")),           # full text papers first
+                int(p.get("citations", 0) or 0),    # then by citations
+                int(p.get("influence", 0) or 0),    # then by influence
+            ),
+            reverse=True,
+        )
+
         papers_text = ""
-        for i, p in enumerate(papers[:20], 1):
+        fulltext_count = 0
+        for i, p in enumerate(sorted_papers[:20], 1):
             source_label = p.get("source", "unknown").upper()
-            pdf_url    = p.get("pdf_url", "")
-            full_text  = p.get("full_text", "")[:1200].strip()
-            abstract   = p.get("abstract", "")[:700].strip()
-            content    = full_text if full_text else abstract
+            pdf_url      = p.get("pdf_url", "")
+            full_text    = p.get("full_text", "")[:2000].strip()
+            abstract     = p.get("abstract", "")[:700].strip()
+            body         = full_text if full_text else abstract
+            citations    = p.get("citations", 0) or 0
+            influence    = p.get("influence", 0) or 0
+            if full_text:
+                fulltext_count += 1
+
+            citation_note = ""
+            if citations > 0:
+                citation_note = f"Citations: {citations}"
+                if influence > 0:
+                    citation_note += f" (influential: {influence})"
+
             papers_text += (
                 f"\n[{i}] [{source_label}]"
-                + (" [FULL TEXT]" if full_text else "")
+                + (" [FULL TEXT — use numbers from this]" if full_text else " [ABSTRACT ONLY]")
                 + f"\nTitle: {p.get('title', '').strip()}\n"
-                f"Content: {content}\n"
-                f"URL: {p.get('url', 'NO_URL')}\n"
+                + (f"{citation_note}\n" if citation_note else "")
+                + f"Content: {body}\n"
+                + f"URL: {p.get('url', 'NO_URL')}\n"
                 + (f"PDF: {pdf_url}\n" if pdf_url else "")
                 + f"Published: {p.get('published', p.get('year', 'unknown'))}\n"
             )
+
+        if fulltext_count > 0:
+            logger.info(f"[PaperResearcher] {fulltext_count}/{len(sorted_papers[:20])} papers have full text")
 
         # -- Memory context (dead ends + filters) -----------------------------
         memory_text = ""
@@ -229,4 +256,4 @@ Return valid JSON matching the schema. No text outside the JSON."""
             status="done",
             findings=findings,
             ideas=ideas,
-        )
+           )
