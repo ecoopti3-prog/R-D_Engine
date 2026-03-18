@@ -148,3 +148,80 @@ def check_spreading_resistance(
             f"at {heat_flux_w_cm2} W/cm2 — impractical (>50°C threshold)"
         )
     return True, f"Spreading ΔT={delta_t_spread:.1f}°C for {area_cm2}cm2 {material} spreader — OK"
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# NumPy-powered: Multi-chip thermal resistance network solver
+# ══════════════════════════════════════════════════════════════════════════════
+
+def solve_thermal_network(
+    power_w: list,
+    r_theta_matrix: list,
+    t_ambient_c: float = 40.0,
+    t_junction_max_c: float = 125.0,
+) -> tuple:
+    """
+    Solve multi-chip thermal resistance network using NumPy linear algebra.
+
+    Models N chips on a shared package (CoWoS, MCM, chiplet interposer).
+    Each chip generates heat that flows through its own R_theta to ambient
+    AND through coupling R_theta to its neighbors.
+
+    This captures the critical real-world effect: a hot GPU die throttling
+    its neighbor through the shared interposer — which single-chip models miss.
+
+    Math:
+        Conductance matrix G[i][i]  = Σ_j (1/R[i][j])   total conductance from node i
+        Conductance matrix G[i][j]  = -1/R[i][j]          coupling term
+        System: G × T_rise = P → solved via np.linalg.solve
+
+    Args:
+        power_w:          list of power dissipation per chip [W]
+        r_theta_matrix:   NxN matrix — R[i][i]=junction-to-ambient, R[i][j]=chip-to-chip coupling [°C/W]
+        t_ambient_c:      ambient temperature [°C]
+        t_junction_max_c: JEDEC junction temperature limit [°C]
+
+    Returns:
+        (passed, detail, T_junction_list, hottest_chip_index)
+    """
+    try:
+        import numpy as np
+    except ImportError:
+        # Graceful fallback if numpy not installed
+        return True, "[ThermalNetwork] numpy not available — skipped", [], 0
+
+    n = len(power_w)
+    if n == 0:
+        return True, "No chips to analyze", [], 0
+
+    P = np.array(power_w, dtype=float)
+    R = np.array(r_theta_matrix, dtype=float)
+
+    # Build conductance matrix
+    G = np.zeros((n, n))
+    for i in range(n):
+        for j in range(n):
+            if i == j:
+                G[i][i] = 1.0 / R[i][i] if R[i][i] > 0 else 1e6
+            elif R[i][j] > 0:
+                G[i][i] += 1.0 / R[i][j]
+                G[i][j]  = -1.0 / R[i][j]
+
+    try:
+        T_rise = np.linalg.solve(G, P)
+    except np.linalg.LinAlgError:
+        T_rise = np.linalg.lstsq(G, P, rcond=None)[0]
+
+    T_junction = T_rise + t_ambient_c
+    T_max      = float(np.max(T_junction))
+    hot_chip   = int(np.argmax(T_junction))
+    passed     = T_max <= t_junction_max_c
+
+    detail = (
+        f"Chip temperatures: {[f'{t:.1f}°C' for t in T_junction.tolist()]} | "
+        f"Hottest: chip {hot_chip} at {T_max:.1f}°C | "
+        f"Limit: {t_junction_max_c}°C | "
+        f"Coupling captured between {n} chips — "
+        f"{'OK' if passed else f'FAIL — chip {hot_chip} exceeds JEDEC limit'}"
+    )
+    return passed, detail, T_junction.tolist(), hot_chip
