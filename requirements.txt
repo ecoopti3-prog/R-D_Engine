@@ -13,6 +13,12 @@ supabase>=2.3.0
 sentence-transformers>=2.6.0
 numpy>=1.26.0
 
+# Physics solvers (thermal network, rainflow fatigue, Weibull, cold plate ODE)
+scipy>=1.12.0
+
+# PDF text extraction from arXiv papers
+pypdf>=3.0.0
+
 # HTTP scraping (sources.py)
 requests>=2.31.0
 
