@@ -12,6 +12,19 @@ from core.schemas import Idea, AgentOutput, CycleState, PhysicsVerdict, NoveltyR
 
 logger = logging.getLogger(__name__)
 
+
+def _sanitize(obj):
+    """Remove null bytes from any object before sending to PostgreSQL.
+    PostgreSQL raises 22P05 on \x00/\u0000 in text fields."""
+    if isinstance(obj, str):
+        return obj.replace("\x00", "").replace("\u0000", "")
+    if isinstance(obj, dict):
+        return {k: _sanitize(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_sanitize(i) for i in obj]
+    return obj
+
+
 _client: Optional[Client] = None
 
 
@@ -364,7 +377,7 @@ def get_all_embeddings(exclude_cycle_id: str | None = None) -> list[dict]:
 def save_agent_output(output: AgentOutput) -> bool:
     db = get_client()
     try:
-        db.table("agent_outputs").insert({
+        db.table("agent_outputs").insert(_sanitize({
             "cycle_id":   output.cycle_id,
             "agent_name": output.agent,
             "output":     output.model_dump(mode="json"),
@@ -372,7 +385,7 @@ def save_agent_output(output: AgentOutput) -> bool:
             "tokens_used": output.tokens_used,
             "duration_ms": output.duration_ms,
             "status":     output.status,
-        }).execute()
+        })).execute()
         return True
     except Exception as e:
         logger.error(f"[DB] save_agent_output failed: {e}")
@@ -434,7 +447,7 @@ def save_daily_summary(cycle_id: str, metadata: dict, date_str: str, counts: dic
     try:
         # FIX: on_conflict="date" ensures upsert merges on the unique date key
         # Without this, Supabase falls back to INSERT and raises 23505 on cycle 4
-        db.table("daily_summaries").upsert({
+        db.table("daily_summaries").upsert(_sanitize({
             "cycle_id":          cycle_id,
             "date":              date_str,
             "executive_summary": metadata.get("executive_summary", ""),
@@ -444,7 +457,7 @@ def save_daily_summary(cycle_id: str, metadata: dict, date_str: str, counts: dic
             "ideas_generated":   counts.get("generated", 0),
             "ideas_killed":      counts.get("killed", 0),
             "diamonds_found":    counts.get("diamonds", 0),
-        }, on_conflict="date").execute()
+        }), on_conflict="date").execute()
         return True
     except Exception as e:
         logger.error(f"[DB] save_daily_summary failed: {e}")
@@ -475,10 +488,10 @@ def save_search_strategy(strategy: dict) -> bool:
     try:
         # FIX: use upsert with on_conflict instead of update+fallback-insert
         # The old pattern caused 23505 duplicate key errors on rapid cycle runs
-        db.table("daily_summaries").upsert({
+        db.table("daily_summaries").upsert(_sanitize({
             "date":            date_str,
             "next_cycle_plan": strategy,
-        }, on_conflict="date").execute()
+        }), on_conflict="date").execute()
         return True
     except Exception as e:
         logger.error(f"[DB] save_search_strategy failed: {e}")
