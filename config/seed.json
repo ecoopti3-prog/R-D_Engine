@@ -1,0 +1,131 @@
+{
+  "domains": [
+    "thermal_management",
+    "power_delivery",
+    "memory_bandwidth",
+    "data_movement",
+    "packaging",
+    "compute_scheduling",
+    "hardware_utilization",
+    "compute_resource_management",
+    "robotics_mechanical",
+    "fluid_dynamics",
+    "actuators_motors",
+    "wiring_harness",
+    "liquid_cooling"
+  ],
+
+  "physics_constraints": {
+    "thermal_management":   ["Carnot limit", "heat flux", "spreading resistance", "junction temperature"],
+    "power_delivery":       ["Landauer limit", "IR drop", "electromigration", "PDN impedance"],
+    "data_movement":        ["roofline model", "memory wall", "bandwidth utilization", "memory latency"],
+    "packaging":            ["signal integrity", "mechanical stress", "interconnect density", "thermal resistance"],
+    "robotics_mechanical":  ["Young modulus", "S-N fatigue curve", "dynamic friction", "yield strength"],
+    "fluid_dynamics":       ["Bernoulli equation", "viscosity pressure drop", "cavitation threshold", "Reynolds number"],
+    "actuators_motors":     ["back-EMF", "torque ripple", "thermal derating", "bearing fatigue"],
+    "wiring_harness":       ["Joule heating", "arc flash threshold", "insulation degradation", "contact resistance"],
+    "liquid_cooling":       ["boiling point elevation", "corrosion galvanic", "cavitation NPSH", "pump curve"]
+  },
+
+  "seed_keywords": [
+    "thermal resistance heat spreader chip",
+    "junction temperature throttling GPU",
+    "heat flux advanced packaging 3D IC",
+    "Carnot efficiency thermal management electronics",
+    "PDN impedance voltage droop AI chip",
+    "IR drop power integrity chiplet",
+    "electromigration power delivery network",
+    "Landauer energy computation limit",
+    "memory wall transformer inference",
+    "roofline model memory bandwidth bound",
+    "HBM latency bandwidth utilization",
+    "data movement energy accelerator",
+    "near-memory computing bandwidth",
+    "signal integrity advanced packaging",
+    "chiplet interconnect density packaging",
+    "GPU kernel scheduling utilization",
+    "compute load balancing cluster",
+    "hardware utilization inference serving",
+    "distributed training communication overhead",
+    "compute resource allocation efficiency",
+    "robotic arm joint fatigue failure",
+    "gear wear vibration industrial robot",
+    "wiring harness thermal degradation robot",
+    "contact resistance connector overheating",
+    "Joule heating cable insulation degradation",
+    "arc flash wiring harness failure",
+    "liquid cooling server leak detection",
+    "cavitation pump AI data center cooling",
+    "corrosion coolant loop server rack",
+    "Bernoulli pressure drop cold plate",
+    "motor torque ripple precision robot",
+    "bearing fatigue servo motor failure",
+    "back-EMF derating thermal motor",
+    "S-N fatigue curve mechanical actuator",
+    "Young modulus stress strain robot joint"
+  ],
+
+  "seed_sources": {
+    "arxiv": 20,
+    "openalex": 15,
+    "google_patents": 8,
+    "job_postings": 7,
+    "opencompute": 8,
+    "github_issues": 15,
+    "huggingface_papers": 10,
+    "nasa_ntrs": 8,
+    "osti_doe": 8
+  },
+
+  "target_companies": [
+    "NVIDIA", "TSMC", "AMD", "Intel",
+    "Google", "Microsoft", "Meta", "Amazon",
+    "Boston Dynamics", "ABB Robotics", "KUKA", "Fanuc",
+    "Vertiv", "Schneider Electric", "Liquid Stack", "GRC"
+  ],
+
+  "intelligence_signals": [
+    "thermal packaging engineer",
+    "power integrity engineer",
+    "PDN engineer",
+    "advanced packaging engineer",
+    "GPU utilization optimization engineer",
+    "distributed systems performance engineer",
+    "compute scheduling engineer",
+    "data center power efficiency engineer",
+    "robotics reliability engineer",
+    "mechatronics failure analysis engineer",
+    "data center liquid cooling engineer",
+    "thermal hydraulics engineer",
+    "motor drive engineer",
+    "wiring harness reliability engineer"
+  ],
+
+  "opportunity_filters": {
+    "require_software_angle": true,
+    "max_capex_for_solution_usd": 5000000,
+    "target_efficiency_gain_percent": 5,
+    "exclude_domains": ["chip_fabrication", "hbm_design", "photonics_hardware"]
+  },
+
+  "arxiv_categories": [
+    "cs.AR", "cs.DC", "cs.ET", "cs.PF", "eess.SP",
+    "cs.RO", "eess.SY", "physics.flu-dyn"
+  ],
+
+  "rss_feeds_extra": [
+    "https://www.therobotreport.com/feed/",
+    "https://spectrum.ieee.org/feeds/topic/robotics.rss",
+    "https://www.datacenterknowledge.com/rss.xml"
+  ],
+
+  "week_one_plan": {
+    "day_1": "hardware_utilization",
+    "day_2": "data_movement",
+    "day_3": "power_delivery",
+    "day_4": "thermal_management",
+    "day_5": "packaging",
+    "day_6": "robotics_mechanical",
+    "day_7": "kill_round"
+  }
+}

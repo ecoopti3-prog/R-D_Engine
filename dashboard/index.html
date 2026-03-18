@@ -1,0 +1,760 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RD Engine — Dashboard</title>
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Syne:wght@400;700;800&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg:#080b0f; --surface:#0e1318; --border:#1a2330; --border2:#253040;
+  --text:#c8d8e8; --dim:#4a6070; --bright:#e8f4ff;
+  --accent:#00c8ff; --ag:rgba(0,200,255,.08); --aglow:rgba(0,200,255,.18);
+  --gold:#ffd700;   --goldg:rgba(255,215,0,.1);
+  --red:#ff4455;    --redg:rgba(255,68,85,.08);
+  --green:#00ff88;  --greeng:rgba(0,255,136,.08);
+  --purple:#a78bfa;
+  --mono:'Space Mono',monospace; --display:'Syne',sans-serif;
+}
+*{box-sizing:border-box;margin:0;padding:0;}
+body{background:var(--bg);color:var(--text);font-family:var(--mono);font-size:13px;min-height:100vh;}
+body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,0,0,.06) 2px,rgba(0,0,0,.06) 4px);pointer-events:none;z-index:999;}
+
+/* ── SETUP ── */
+#setup{position:fixed;inset:0;background:var(--bg);display:flex;align-items:center;justify-content:center;flex-direction:column;gap:28px;padding:40px;z-index:500;}
+#setup h1{font-family:var(--display);font-size:clamp(24px,4vw,44px);font-weight:800;color:var(--bright);letter-spacing:-1px;}
+#setup h1 span{color:var(--accent);}
+.card{background:var(--surface);border:1px solid var(--border2);padding:32px 36px;max-width:500px;width:100%;}
+.card p{color:var(--dim);margin-bottom:20px;line-height:1.8;font-size:12px;}
+.card p strong{color:var(--text);}
+.lbl{font-size:10px;letter-spacing:2px;text-transform:uppercase;color:var(--accent);margin-bottom:6px;}
+.inp{background:var(--bg);border:1px solid var(--border2);color:var(--bright);font-family:var(--mono);font-size:12px;padding:10px 14px;width:100%;outline:none;transition:border-color .2s;margin-bottom:14px;}
+.inp:focus{border-color:var(--accent);}
+.inp::placeholder{color:var(--dim);}
+.btn{background:var(--accent);color:#000;border:none;font-family:var(--mono);font-weight:700;font-size:11px;letter-spacing:2px;text-transform:uppercase;padding:13px;cursor:pointer;width:100%;transition:opacity .2s;}
+.btn:hover{opacity:.85;}
+.note{font-size:11px;color:var(--dim);text-align:center;max-width:380px;}
+
+/* ── DASHBOARD ── */
+#dash{display:none;flex-direction:column;min-height:100vh;}
+#dash.on{display:flex;}
+
+/* header */
+header{border-bottom:1px solid var(--border);padding:0 28px;height:52px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;background:rgba(8,11,15,.97);backdrop-filter:blur(8px);z-index:100;}
+.logo{font-family:var(--display);font-weight:800;font-size:17px;color:var(--bright);display:flex;align-items:center;gap:8px;}
+.dot{width:7px;height:7px;background:var(--accent);border-radius:50%;animation:pulse 2s infinite;}
+@keyframes pulse{0%,100%{box-shadow:0 0 0 0 var(--aglow);}50%{box-shadow:0 0 0 5px transparent;}}
+.hright{display:flex;align-items:center;gap:16px;}
+#ts{font-size:11px;color:var(--dim);}
+.hbtn{background:none;border:1px solid var(--border2);color:var(--dim);font-family:var(--mono);font-size:10px;letter-spacing:1px;padding:5px 12px;cursor:pointer;text-transform:uppercase;transition:all .2s;}
+.hbtn:hover{border-color:var(--accent);color:var(--accent);}
+
+/* stats strip */
+.strip{display:grid;grid-template-columns:repeat(5,1fr);border-bottom:1px solid var(--border);}
+.sc{padding:18px 22px;border-right:1px solid var(--border);position:relative;}
+.sc:last-child{border-right:none;}
+.sc::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;}
+.sc.d::before{background:var(--gold);}
+.sc.a::before{background:var(--green);}
+.sc.k::before{background:var(--red);}
+.sc.c::before{background:var(--accent);}
+.sc.p::before{background:var(--purple);}
+.slbl{font-size:10px;letter-spacing:2px;text-transform:uppercase;color:var(--dim);margin-bottom:6px;}
+.sval{font-family:var(--display);font-size:32px;font-weight:800;color:var(--bright);}
+.sc.d .sval{color:var(--gold);}
+.sc.a .sval{color:var(--green);}
+.sc.k .sval{color:var(--red);}
+.sc.c .sval{color:var(--accent);}
+.sc.p .sval{color:var(--purple);}
+
+/* main grid */
+.grid{display:grid;grid-template-columns:1fr 320px;flex:1;}
+.lcol{border-right:1px solid var(--border);}
+.rcol{display:flex;flex-direction:column;}
+
+/* filter buttons */
+.fbtn{background:none;border:1px solid var(--border);color:var(--dim);padding:3px 9px;border-radius:4px;font-size:9px;letter-spacing:.8px;text-transform:uppercase;cursor:pointer;}
+.fbtn.on{background:var(--accent);border-color:var(--accent);color:#000;}
+.fbtn:hover:not(.on){border-color:var(--text);color:var(--text);}
+/* tabs */
+.tabs{display:flex;border-bottom:1px solid var(--border);padding:0 20px;overflow-x:auto;}
+.tab{padding:11px 14px;font-size:10px;letter-spacing:1.5px;text-transform:uppercase;color:var(--dim);cursor:pointer;border-bottom:2px solid transparent;transition:all .2s;white-space:nowrap;}
+.tab.on{color:var(--bright);border-bottom-color:var(--accent);}
+.tab:hover:not(.on){color:var(--text);}
+/* rating buttons */
+.rbtn{background:var(--surface);border:1px solid var(--border2);color:var(--dim);font-family:var(--mono);font-size:13px;font-weight:700;width:36px;height:36px;cursor:pointer;transition:all .2s;}
+.rbtn:hover,.rbtn.sel{background:var(--accent);border-color:var(--accent);color:#000;}
+.tc{display:none;} .tc.on{display:block;}
+
+/* section header */
+.sh{padding:12px 20px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;}
+.st{font-family:var(--display);font-size:12px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:var(--bright);}
+.sc2{font-size:10px;color:var(--dim);background:var(--border);padding:2px 7px;}
+
+/* table */
+.tbl{width:100%;border-collapse:collapse;}
+.tbl th{text-align:left;padding:9px 20px;font-size:9px;letter-spacing:2px;text-transform:uppercase;color:var(--dim);background:var(--surface);border-bottom:1px solid var(--border);}
+.tbl td{padding:12px 20px;border-bottom:1px solid var(--border);vertical-align:top;}
+.tbl tr:hover td{background:var(--ag);cursor:pointer;}
+.ititle{color:var(--bright);font-size:12px;margin-bottom:3px;}
+.idomain{font-size:9px;letter-spacing:1px;text-transform:uppercase;color:var(--dim);}
+.bar-wrap{display:flex;align-items:center;gap:8px;min-width:90px;}
+.bar{height:3px;background:var(--border);flex:1;}
+.barfill{height:100%;background:var(--gold);}
+.bval{font-size:11px;font-weight:700;color:var(--gold);min-width:24px;text-align:right;}
+.badge{font-size:9px;letter-spacing:1px;text-transform:uppercase;padding:2px 7px;font-weight:700;}
+.b-diamond{background:var(--goldg);color:var(--gold);border:1px solid rgba(255,215,0,.3);}
+.b-active {background:var(--greeng);color:var(--green);border:1px solid rgba(0,255,136,.3);}
+.b-killed {background:var(--redg);color:var(--red);border:1px solid rgba(255,68,85,.3);}
+.b-archived{background:var(--border);color:var(--dim);border:1px solid var(--border2);}
+.empty{padding:32px 20px;text-align:center;color:var(--dim);font-size:11px;}
+
+/* kill feed */
+.kitem{padding:12px 18px;border-bottom:1px solid var(--border);cursor:pointer;transition:background .15s;}
+.kitem:hover{background:var(--redg);}
+.ktitle{font-size:11px;color:var(--text);margin-bottom:3px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;}
+.kmeta{font-size:9px;color:var(--dim);display:flex;gap:6px;align-items:center;}
+.kcat{font-size:8px;letter-spacing:1px;text-transform:uppercase;color:var(--red);background:var(--redg);padding:2px 6px;}
+
+/* agent runs */
+.arow{padding:8px 14px;border-bottom:1px solid var(--border);display:grid;grid-template-columns:1fr auto auto auto;align-items:center;gap:8px;}
+.arow:hover{background:var(--ag);}
+.aname{font-size:10px;color:var(--bright);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.arow-meta{font-size:9px;color:var(--dim);margin-top:2px;}
+.arow-left{display:flex;flex-direction:column;}
+.allm{font-size:9px;color:var(--accent);background:rgba(0,200,255,.08);padding:1px 5px;border-radius:2px;white-space:nowrap;}
+.adur{font-size:9px;color:var(--dim);white-space:nowrap;}
+.astatus{font-size:9px;padding:1px 5px;border-radius:2px;font-weight:700;}
+.astatus-done{color:var(--green);background:var(--greeng);}
+.astatus-error{color:var(--red);background:var(--redg);}
+.astatus-running{color:var(--gold);background:var(--goldg);}
+
+/* daily summaries */
+.day-card{padding:16px 20px;border-bottom:1px solid var(--border);cursor:pointer;transition:background .15s;}
+.day-card:hover{background:var(--ag);}
+.day-date{font-size:11px;color:var(--accent);margin-bottom:4px;display:flex;justify-content:space-between;align-items:center;}
+.day-counts{font-size:10px;color:var(--dim);}
+.day-summary{font-size:11px;color:var(--text);margin-top:6px;line-height:1.6;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;}
+
+/* cycle history */
+.crow{padding:10px 20px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;}
+.cnum{font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:var(--accent);min-width:80px;}
+.cdate{font-size:10px;color:var(--dim);}
+.cstatus{font-size:9px;letter-spacing:1px;text-transform:uppercase;padding:2px 7px;}
+.cs-done{color:var(--green);background:var(--greeng);}
+.cs-failed{color:var(--red);background:var(--redg);}
+.cs-running{color:var(--accent);background:var(--ag);animation:blink 1s infinite;}
+@keyframes blink{50%{opacity:.5;}}
+
+/* weekly section */
+.weekly-card{padding:14px 20px;border-bottom:1px solid var(--border);}
+.wk-date{font-size:10px;color:var(--purple);margin-bottom:4px;}
+.wk-quality{font-size:9px;letter-spacing:1.5px;text-transform:uppercase;padding:2px 6px;margin-left:8px;}
+.wk-strong{color:var(--green);background:var(--greeng);}
+.wk-average{color:var(--gold);background:var(--goldg);}
+.wk-weak{color:var(--red);background:var(--redg);}
+.wk-text{font-size:11px;color:var(--text);line-height:1.6;margin-top:6px;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;}
+
+/* detail panel */
+#dp{display:none;position:fixed;right:0;top:0;bottom:0;width:460px;background:var(--surface);border-left:1px solid var(--border2);z-index:200;overflow-y:auto;animation:si .2s ease;}
+@keyframes si{from{transform:translateX(30px);opacity:0;}to{transform:translateX(0);opacity:1;}}
+.dph{padding:18px 22px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:flex-start;position:sticky;top:0;background:var(--surface);z-index:10;}
+.dpc{background:none;border:none;color:var(--dim);cursor:pointer;font-size:18px;transition:color .2s;}
+.dpc:hover{color:var(--bright);}
+.dpb{padding:22px;}
+.dptitle{font-family:var(--display);font-size:17px;font-weight:700;color:var(--bright);line-height:1.3;margin-bottom:14px;}
+.dpscores{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--border);margin-bottom:20px;border:1px solid var(--border);}
+.dpscore{background:var(--surface);padding:12px 14px;}
+.dpsl{font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:var(--dim);margin-bottom:3px;}
+.dpsv{font-family:var(--display);font-size:22px;font-weight:800;}
+.dpsv.diamond{color:var(--gold);}  .dpsv.physics{color:#60a5fa;}
+.dpsv.market{color:var(--green);} .dpsv.novelty{color:var(--purple);}
+.dpsv.scale{color:#fb923c;}
+.dpfield{margin-bottom:16px;}
+.dpfl{font-size:9px;letter-spacing:2px;text-transform:uppercase;color:var(--accent);margin-bottom:6px;}
+.dpfv{color:var(--text);font-size:12px;line-height:1.7;}
+
+/* error */
+#err{display:none;background:var(--redg);border:1px solid rgba(255,68,85,.3);color:var(--red);padding:10px 20px;font-size:12px;text-align:center;}
+
+@media(max-width:860px){.grid{grid-template-columns:1fr;}.strip{grid-template-columns:repeat(3,1fr);}.sc:nth-child(n+4){border-top:1px solid var(--border);}#dp{width:100%;}}
+</style>
+</head>
+<body>
+
+<!-- SETUP -->
+<div id="setup">
+  <h1>RD <span>Engine</span></h1>
+  <div class="card">
+    <p>Connect to your Supabase project. Credentials are saved in <strong>localStorage</strong> and never leave your browser.</p>
+    <div class="lbl">Supabase URL</div>
+    <input class="inp" id="iurl" type="text" placeholder="https://xxxx.supabase.co" />
+    <div class="lbl">Anon Key</div>
+    <input class="inp" id="ikey" type="password" placeholder="eyJ..." />
+    <button class="btn" onclick="connect()">CONNECT →</button>
+  </div>
+  <p class="note">Use the <strong>anon key</strong>. RLS in Supabase controls what's readable.</p>
+</div>
+
+<!-- DASHBOARD -->
+<div id="dash">
+  <header>
+    <div class="logo"><div class="dot"></div>RD Engine</div>
+    <div class="hright">
+      <span id="ts">—</span>
+      <button class="hbtn" onclick="loadAll()">↻ Refresh</button>
+      <button class="hbtn" onclick="resetConn()">⚙ Change</button>
+    </div>
+  </header>
+
+  <div id="err"></div>
+
+  <div class="strip">
+    <div class="sc d"><div class="slbl">Diamonds</div><div class="sval" id="s-d">—</div></div>
+    <div class="sc a"><div class="slbl">Active</div><div class="sval" id="s-a">—</div></div>
+    <div class="sc k"><div class="slbl">Killed</div><div class="sval" id="s-k">—</div></div>
+    <div class="sc c"><div class="slbl">Cycles Run</div><div class="sval" id="s-c">—</div></div>
+    <div class="sc p"><div class="slbl">Avg Score</div><div class="sval" id="s-p">—</div></div>
+  </div>
+
+  <!-- TODAY SUMMARY BANNER -->
+  <div id="today-banner" style="display:none;background:var(--surface);border:1px solid var(--border2);border-left:3px solid var(--accent);padding:14px 20px;margin-bottom:16px;">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+      <span style="font-size:10px;letter-spacing:2px;color:var(--accent)">TODAY'S RESEARCH SUMMARY</span>
+      <span style="font-size:10px;color:var(--dim)" id="banner-date"></span>
+    </div>
+    <div id="banner-summary" style="font-size:12px;color:var(--text);line-height:1.7;">—</div>
+    <div style="margin-top:8px;display:flex;gap:16px;">
+      <span style="font-size:10px;color:var(--dim)">Tomorrow: <span id="banner-tomorrow" style="color:var(--accent)">—</span></span>
+      <span style="font-size:10px;color:var(--dim)">Generated: <span id="banner-gen" style="color:var(--green)">—</span></span>
+      <span style="font-size:10px;color:var(--dim)">Killed: <span id="banner-killed" style="color:var(--red)">—</span></span>
+      <span style="font-size:10px;color:var(--dim)">💎: <span id="banner-diamonds" style="color:var(--gold)">—</span></span>
+    </div>
+  </div>
+
+  <div class="grid">
+    <div class="lcol">
+      <div class="tabs">
+        <div class="tab on" onclick="tab('ideas')">Ideas</div>
+        <div class="tab" onclick="tab('daily')">Daily Summaries</div>
+        <div class="tab" onclick="tab('weekly')">Weekly Reports</div>
+        <div class="tab" onclick="tab('cycles')">Cycles</div>
+        <div class="tab" onclick="tab('hypotheses')">🧪 Hypotheses</div>
+        <div class="tab" onclick="tab('sources')">📡 Sources</div>
+      </div>
+
+      <!-- IDEAS -->
+      <div class="tc on" id="tc-ideas">
+        <div class="sh">
+          <span class="st">💎 All Ideas</span><span class="sc2" id="n-ideas">—</span>
+          <span style="margin-left:auto;display:flex;gap:6px;">
+            <button class="fbtn on" id="fb-all"      onclick="setFilter('all')">All</button>
+            <button class="fbtn"    id="fb-diamond"  onclick="setFilter('diamond')">💎 Diamond</button>
+            <button class="fbtn"    id="fb-active"   onclick="setFilter('active')">Active</button>
+            <button class="fbtn"    id="fb-archived" onclick="setFilter('archived')">Archived</button>
+            <button class="fbtn"    id="fb-killed"   onclick="setFilter('killed')">⚰ Killed</button>
+          </span>
+        </div>
+        <div style="overflow-x:auto">
+          <table class="tbl">
+            <thead><tr>
+              <th style="width:42%">Idea</th>
+              <th>Score</th><th>Physics</th><th>Market</th><th>Status</th>
+            </tr></thead>
+            <tbody id="tb-ideas"><tr><td colspan="5" class="empty">Loading...</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- DAILY SUMMARIES -->
+      <div class="tc" id="tc-daily">
+        <div class="sh"><span class="st">Daily Summaries</span><span class="sc2" id="n-daily">—</span></div>
+        <div id="daily-list"><div class="empty">Loading...</div></div>
+      </div>
+
+      <!-- WEEKLY REPORTS -->
+      <div class="tc" id="tc-weekly">
+        <div class="sh"><span class="st">Weekly Reports</span></div>
+        <div id="weekly-list"><div class="empty">Loading...</div></div>
+      </div>
+
+      <!-- CYCLES -->
+      <div class="tc" id="tc-cycles">
+        <div class="sh"><span class="st">Cycle History</span></div>
+        <div id="cycles-list"><div class="empty">Loading...</div></div>
+      </div>
+
+      <!-- HYPOTHESES (v5) -->
+      <div class="tc" id="tc-hypotheses">
+        <div class="sh"><span class="st">🧪 Open Hypotheses</span><span class="sc2" id="n-hyp">—</span></div>
+        <div id="hyp-list"><div class="empty">Loading...</div></div>
+      </div>
+
+      <!-- SOURCES (v5) -->
+      <div class="tc" id="tc-sources">
+        <div class="sh"><span class="st">📡 Source Performance</span></div>
+        <div id="src-list"><div class="empty">Loading...</div></div>
+      </div>
+    </div>
+
+    <div class="rcol">
+      <!-- KILL FEED -->
+      <div class="sh"><span class="st">⚰ Kill Feed</span><span class="sc2" id="n-kills">0</span></div>
+      <div id="kills-list" style="overflow-y:auto;max-height:380px;"><div class="empty">No kills yet</div></div>
+      <!-- AGENTS -->
+      <div class="sh" style="margin-top:auto;border-top:1px solid var(--border)"><span class="st">Agent Runs</span></div>
+      <div id="agents-list"><div class="empty">No runs yet</div></div>
+    </div>
+  </div>
+</div>
+
+<!-- DETAIL PANEL -->
+<div id="dp">
+  <div class="dph">
+    <div><span id="dp-badge"></span></div>
+    <button class="dpc" onclick="closeDP()">✕</button>
+  </div>
+  <div class="dpb">
+    <div class="dptitle" id="dp-title">—</div>
+    <div class="dpscores" id="dp-scores"></div>
+    <div id="dp-fields"></div>
+
+    <!-- v5: Human Feedback Rating -->
+    <div id="dp-feedback" style="margin-top:20px;padding-top:16px;border-top:1px solid var(--border)">
+      <div class="dpfl" style="margin-bottom:10px;letter-spacing:1.5px;">⭐ YOUR RATING</div>
+      <div style="display:flex;gap:8px;margin-bottom:10px;" id="rating-stars">
+        <button class="rbtn" onclick="setRating(1)" title="Clearly wrong">1</button>
+        <button class="rbtn" onclick="setRating(2)" title="Probably wrong">2</button>
+        <button class="rbtn" onclick="setRating(3)" title="Plausible">3</button>
+        <button class="rbtn" onclick="setRating(4)" title="Interesting">4</button>
+        <button class="rbtn" onclick="setRating(5)" title="Must investigate">5</button>
+      </div>
+      <textarea id="rating-reason" placeholder="Why? (optional — helps the system learn)" style="background:var(--bg);border:1px solid var(--border2);color:var(--text);font-family:var(--mono);font-size:11px;padding:8px;width:100%;height:56px;outline:none;resize:none;margin-bottom:8px;"></textarea>
+      <button onclick="submitRating()" style="background:var(--accent);color:#000;border:none;font-family:var(--mono);font-size:10px;letter-spacing:1px;padding:8px 14px;cursor:pointer;width:100%;font-weight:700;">SUBMIT RATING</button>
+      <div id="rating-msg" style="font-size:10px;color:var(--green);margin-top:6px;display:none;">✓ Rating saved</div>
+    </div>
+  </div>
+</div>
+
+<script>
+const UK='rde_url', KK='rde_key';
+let URL_='', KEY_='';
+
+// ── API ──────────────────────────────────────────────────────────────────────
+async function q(table, {select='*',filter=[],order=null,limit=null}={}) {
+  const u = new URL(`${URL_}/rest/v1/${table}`);
+  u.searchParams.set('select', select);
+  filter.forEach(([k,v]) => u.searchParams.append(k,v));
+  if (order)  u.searchParams.set('order', order);
+  if (limit)  u.searchParams.set('limit', String(limit));
+  const r = await fetch(u, {headers:{apikey:KEY_,Authorization:`Bearer ${KEY_}`}});
+  if (!r.ok) throw new Error(`${r.status}`);
+  return r.json();
+}
+
+async function qCount(table, qs='') {
+  const u = `${URL_}/rest/v1/${table}${qs?'?'+qs:''}`;
+  const r = await fetch(u, {headers:{apikey:KEY_,Authorization:`Bearer ${KEY_}`,Prefer:'count=exact',Range:'0-0'}});
+  const rng = r.headers.get('Content-Range')||'';
+  const m = rng.match(/\/(\d+)/);
+  return m ? +m[1] : 0;
+}
+
+// ── CONNECTION ───────────────────────────────────────────────────────────────
+function connect() {
+  const u = document.getElementById('iurl').value.trim().replace(/\/$/,'');
+  const k = document.getElementById('ikey').value.trim();
+  if (!u||!k) return alert('Both fields required');
+  URL_=u; KEY_=k;
+  localStorage.setItem(UK,u); localStorage.setItem(KK,k);
+  boot();
+}
+function resetConn() {
+  localStorage.removeItem(UK); localStorage.removeItem(KK);
+  document.getElementById('setup').style.display='flex';
+  document.getElementById('dash').classList.remove('on');
+}
+function boot() {
+  document.getElementById('setup').style.display='none';
+  document.getElementById('dash').classList.add('on');
+  loadAll();
+  setInterval(loadAll, 60*1000);
+}
+
+// ── LOAD ALL ─────────────────────────────────────────────────────────────────
+function showErr(m) {
+  const e=document.getElementById('err');
+  e.textContent='⚠ '+m; e.style.display='block';
+  setTimeout(()=>e.style.display='none',7000);
+}
+async function loadAll() {
+  document.getElementById('ts').textContent='Loading...';
+  try {
+    await Promise.all([loadStats(),loadIdeas(),loadKills(),loadAgents(),loadCycles(),loadDaily(),loadWeekly(),loadTodaySummary()]);
+    loadSources();
+    document.getElementById('ts').textContent='Updated '+new Date().toLocaleTimeString();
+  } catch(e) {
+    showErr('Load failed: '+e.message);
+    document.getElementById('ts').textContent='Error';
+  }
+}
+
+async function loadStats() {
+  const [d,a,k,c,all] = await Promise.all([
+    qCount('ideas','status=eq.diamond'),
+    qCount('ideas','status=eq.active'),
+    qCount('ideas','status=eq.killed'),
+    qCount('research_cycles','status=eq.done'),
+    q('ideas',{select:'diamond_score',filter:[['diamond_score','gt.0']],limit:2000}),
+  ]);
+  set('s-d',d); set('s-a',a); set('s-k',k); set('s-c',c);
+  set('s-p', all.length ? (all.reduce((s,i)=>s+i.diamond_score,0)/all.length).toFixed(1) : '—');
+}
+
+let currentFilter = 'all';
+function setFilter(f) {
+  currentFilter = f;
+  ['all','diamond','active','archived','killed'].forEach(s => {
+    const b = document.getElementById('fb-'+s);
+    if (b) b.classList.toggle('on', s === f);
+  });
+  loadIdeas();
+}
+
+async function loadIdeas() {
+  const statusFilter = currentFilter === 'all'
+    ? [['status','in.("diamond","active","archived","killed")']]
+    : [['status','eq.'+currentFilter]];
+  const rows = await q('ideas',{
+    select:'id,title,domain,diamond_score,physics_score,market_score,novelty_score,scalability_score,status,problem_statement,physical_limit,proposed_direction,company_context,kill_reason',
+    filter: statusFilter,
+    order: currentFilter === 'killed' ? 'updated_at.desc' : 'diamond_score.desc',
+    limit:200,
+  });
+  set('n-ideas',rows.length+' ideas');
+  const tb = document.getElementById('tb-ideas');
+  tb.innerHTML = rows.length ? rows.map(r=>`
+    <tr onclick='showDP(${JSON.stringify(r).replace(/"/g,"&quot;")})'>
+      ${r.status === 'killed'
+        ? `<td><div class="ititle" style="color:var(--dim)">${esc(r.title)}</div><div class="idomain">${esc(r.domain)}</div>${r.kill_reason ? `<div style="font-size:9px;color:var(--red);margin-top:2px">${esc(r.kill_reason.substring(0,90))}</div>` : ''}</td><td>—</td><td>—</td><td>—</td>`
+        : `<td><div class="ititle">${esc(r.title)}</div><div class="idomain">${esc(r.domain)}</div></td>
+           <td><div class="bar-wrap"><div class="bar"><div class="barfill" style="width:${(r.diamond_score||0)*10}%"></div></div><span class="bval">${(r.diamond_score||0).toFixed(1)}</span></div></td>
+           <td style="color:#60a5fa;font-size:11px">${(r.physics_score||0).toFixed(1)}</td>
+           <td style="color:var(--green);font-size:11px">${(r.market_score||0).toFixed(1)}</td>`}
+      <td><span class="badge b-${r.status}">${r.status}</span></td>
+    </tr>`).join('')
+    : `<tr><td colspan="5" class="empty">${currentFilter==='killed'?'No killed ideas yet':'No ideas yet — run Cycle 1'}</td></tr>`;
+}
+
+async function loadKills() {
+  const rows = await q('ideas',{select:'id,title,domain,kill_reason',filter:[['status','eq.killed']],order:'updated_at.desc',limit:60});
+  set('n-kills',rows.length);
+  const el = document.getElementById('kills-list');
+  el.innerHTML = rows.length ? rows.map(r=>{
+    const reason = r.kill_reason||'no reason';
+    const cat = reason.match(/^\[([^\]]+)\]/)?.[1]||'unknown';
+    const txt = reason.replace(/^\[[^\]]+\]\s*/,'');
+    return `<div class="kitem" onclick='showDP(${JSON.stringify(r).replace(/"/g,"&quot;")})'>
+      <div class="ktitle">${esc(r.title)}</div>
+      <div class="kmeta"><span class="kcat">${esc(cat)}</span>${esc(txt.substring(0,55))}${txt.length>55?'...':''}</div>
+    </div>`;
+  }).join('') : '<div class="empty">No kills yet</div>';
+}
+
+async function loadAgents() {
+  const rows = await q('agent_outputs',{
+    select:'agent_name,status,llm_used,tokens_used,duration_ms,created_at',
+    order:'created_at.desc',
+    limit:120
+  });
+  if (!rows.length) {
+    document.getElementById('agents-list').innerHTML='<div class="empty">No runs yet</div>';
+    return;
+  }
+  const byAgent={};
+  rows.forEach(r=>{
+    if (!byAgent[r.agent_name]) byAgent[r.agent_name]={last:r, count:0};
+    byAgent[r.agent_name].count++;
+  });
+  const sorted=Object.entries(byAgent).sort((a,b)=>
+    new Date(b[1].last.created_at)-new Date(a[1].last.created_at)
+  );
+  document.getElementById('agents-list').innerHTML = sorted.map(([name,d])=>{
+    const r=d.last;
+    const dur = r.duration_ms ? (r.duration_ms/1000).toFixed(1)+'s' : '—';
+    const tok = r.tokens_used ? r.tokens_used.toLocaleString()+' tok' : '';
+    const st = r.status||'done';
+    const ts = r.created_at ? new Date(r.created_at).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}) : '';
+    return `<div class="arow">
+      <div class="arow-left">
+        <div class="aname">${esc(name)}</div>
+        <div class="arow-meta">${ts}${tok?' · '+tok:''} · ${d.count} runs</div>
+      </div>
+      <div class="allm">${esc(r.llm_used||'—')}</div>
+      <div class="adur">${dur}</div>
+      <div class="astatus astatus-${st==='done'?'done':st==='running'?'running':'error'}">${st}</div>
+    </div>`;
+  }).join('');
+}
+
+async function loadCycles() {
+  const rows = await q('research_cycles',{select:'id,date,cycle_number,status,started_at,ended_at',order:'started_at.desc',limit:30});
+  const labels={1:'Harvest',2:'Physics+Market',3:'Kill Round',4:'Director'};
+  document.getElementById('cycles-list').innerHTML = rows.length
+    ? rows.map(r=>{
+        const dur=(r.started_at&&r.ended_at)?Math.round((new Date(r.ended_at)-new Date(r.started_at))/1000)+'s':'';
+        return `<div class="crow">
+          <div><span class="cnum">C${r.cycle_number} · ${labels[r.cycle_number]||''}</span></div>
+          <span class="cdate">${r.date||''} ${dur?'· '+dur:''}</span>
+          <span class="cstatus cs-${r.status}">${r.status}</span>
+        </div>`;
+      }).join('')
+    : '<div class="empty">No cycles run yet</div>';
+}
+
+async function loadTodaySummary() {
+  try {
+    const rows = await q('daily_summaries', {
+      select:'date,executive_summary,ideas_generated,ideas_killed,diamonds_found,next_cycle_plan',
+      order:'date.desc', limit:1
+    });
+    if (!rows || !rows.length) return;
+    const r = rows[0];
+    const banner = document.getElementById('today-banner');
+    banner.style.display = 'block';
+    document.getElementById('banner-date').textContent = r.date || '';
+    document.getElementById('banner-summary').textContent = r.executive_summary || 'Summary will appear after Cycle 4 completes';
+    const plan = r.next_cycle_plan || {};
+    const domains = (plan.priority_domains || []).slice(0,3).join(', ') || '—';
+    document.getElementById('banner-tomorrow').textContent = domains;
+    document.getElementById('banner-gen').textContent = r.ideas_generated || 0;
+    document.getElementById('banner-killed').textContent = r.ideas_killed || 0;
+    document.getElementById('banner-diamonds').textContent = r.diamonds_found || 0;
+  } catch(e) { console.error('Summary banner error:', e); }
+}
+
+async function loadDaily() {
+  const rows = await q('daily_summaries',{select:'date,executive_summary,ideas_generated,ideas_killed,diamonds_found,next_cycle_plan',order:'date.desc',limit:14});
+  set('n-daily',rows.length+' days');
+  document.getElementById('daily-list').innerHTML = rows.length
+    ? rows.map(r=>{
+        const plan = r.next_cycle_plan||{};
+        const domains = (plan.priority_domains||[]).join(', ')||'—';
+        return `<div class="day-card">
+          <div class="day-date">
+            <span>${r.date}</span>
+            <span style="color:var(--dim);font-size:9px">${r.ideas_generated||0} generated · ${r.ideas_killed||0} killed · ${r.diamonds_found||0} 💎</span>
+          </div>
+          <div class="day-summary">${esc(r.executive_summary||'No summary yet')}</div>
+          <div style="font-size:10px;color:var(--accent);margin-top:6px">Tomorrow: ${esc(domains)}</div>
+        </div>`;
+      }).join('')
+    : '<div class="empty">No summaries yet — run Cycle 4 first</div>';
+}
+
+// FIX: query weekly_reports table directly instead of hacking daily_summaries length
+async function loadWeekly() {
+  let rows = [];
+  try {
+    rows = await q('weekly_reports', {
+      select: 'week_start,report_markdown,metadata,quality',
+      order: 'week_start.desc',
+      limit: 12
+    });
+  } catch(_) {}
+
+  document.getElementById('weekly-list').innerHTML = rows.length
+    ? rows.map(r => {
+        const meta = r.metadata || {};
+        const quality = r.quality || meta.week_quality || 'average';
+        const qualityCss = quality === 'strong' ? 'wk-strong' : quality === 'weak' ? 'wk-weak' : 'wk-average';
+        const preview = (r.report_markdown || '').replace(/#+\s/g,'').substring(0, 220);
+        const nextKw = (meta.priority_keywords_next_week || []).slice(0,3).join(', ') || '—';
+        return `<div class="weekly-card">
+          <div class="wk-date">Week of ${r.week_start} <span class="wk-quality ${qualityCss}">${quality}</span></div>
+          <div class="wk-text">${esc(preview)}${preview.length >= 220 ? '...' : ''}</div>
+          <div style="font-size:10px;color:var(--dim);margin-top:6px">Next focus: ${esc(nextKw)}</div>
+        </div>`;
+      }).join('')
+    : '<div class="empty">Weekly reports appear here after Sunday maintenance</div>';
+}
+
+// ── DETAIL PANEL ─────────────────────────────────────────────────────────────
+function showDP(r) {
+  document.getElementById('dp-title').textContent = r.title||'—';
+  document.getElementById('dp-badge').innerHTML = `<span class="badge b-${r.status}">${r.status||'—'}</span>`;
+  document.getElementById('dp-scores').innerHTML = [
+    {l:'Diamond',v:(r.diamond_score||0).toFixed(1),c:'diamond'},
+    {l:'Physics', v:(r.physics_score||0).toFixed(1),c:'physics'},
+    {l:'Market',  v:(r.market_score||0).toFixed(1), c:'market'},
+    {l:'Novelty', v:(r.novelty_score||0).toFixed(1),c:'novelty'},
+    {l:'Scale',   v:(r.scalability_score||0).toFixed(1),c:'scale'},
+    {l:'Domain',  v:r.domain||'—',c:'diamond'},
+  ].map(s=>`<div class="dpscore"><div class="dpsl">${s.l}</div><div class="dpsv ${s.c}">${s.v}</div></div>`).join('');
+  const fields=[
+    {l:'Problem Statement',v:r.problem_statement},
+    {l:'Physical Limit',   v:r.physical_limit},
+    {l:'Proposed Direction',v:r.proposed_direction},
+    {l:'Company Context',  v:r.company_context},
+    {l:'Kill Reason',      v:r.kill_reason},
+    {l:'Human Rating',     v:r.human_rating ? `${r.human_rating}/5` : null},
+  ].filter(f=>f.v);
+  document.getElementById('dp-fields').innerHTML = fields.map(f=>`
+    <div class="dpfield"><div class="dpfl">${f.l}</div><div class="dpfv">${esc(f.v)}</div></div>`).join('');
+
+  window._dpIdeaId = r.id;
+  window._selectedRating = r.human_rating || 0;
+  document.querySelectorAll('.rbtn').forEach((b,i)=>b.classList.toggle('sel', i+1 === window._selectedRating));
+  document.getElementById('rating-reason').value = '';
+  document.getElementById('rating-msg').style.display = 'none';
+
+  document.getElementById('dp').style.display='block';
+}
+function closeDP(){ document.getElementById('dp').style.display='none'; }
+document.addEventListener('keydown',e=>{ if(e.key==='Escape') closeDP(); });
+
+function setRating(n) {
+  window._selectedRating = n;
+  document.querySelectorAll('.rbtn').forEach((b,i)=>b.classList.toggle('sel', i+1===n));
+}
+
+async function submitRating() {
+  if (!window._dpIdeaId || !window._selectedRating) return;
+  const reason = document.getElementById('rating-reason').value;
+  try {
+    await fetch(`${URL_}/rest/v1/idea_feedback`, {
+      method: 'POST',
+      headers: {
+        'apikey': KEY_,
+        'Authorization': `Bearer ${KEY_}`,
+        'Content-Type': 'application/json',
+        'Prefer': 'resolution=merge-duplicates',
+      },
+      body: JSON.stringify({
+        idea_id: window._dpIdeaId,
+        rating: window._selectedRating,
+        reason: reason || '',
+        rater: 'human',
+      }),
+    });
+    document.getElementById('rating-msg').style.display = 'block';
+    setTimeout(()=>document.getElementById('rating-msg').style.display='none', 3000);
+  } catch(e) { console.error('Rating save failed:', e); }
+}
+
+// ── TABS ─────────────────────────────────────────────────────────────────────
+function tab(name) {
+  const names=['ideas','daily','weekly','cycles','hypotheses','sources'];
+  document.querySelectorAll('.tab').forEach((t,i)=>t.classList.toggle('on',names[i]===name));
+  document.querySelectorAll('.tc').forEach(c=>c.classList.remove('on'));
+  document.getElementById('tc-'+name).classList.add('on');
+  if (name==='hypotheses') loadHypotheses();
+  if (name==='sources') loadSources();
+}
+
+async function loadHypotheses() {
+  const el = document.getElementById('hyp-list');
+  try {
+    const data = await q('hypotheses', {order:'confidence.desc',filter:[['status','eq.open']],limit:20});
+    set('n-hyp', data.length);
+    if (!data.length) { el.innerHTML='<div class="empty">No hypotheses yet — appears after week 1</div>'; return; }
+    el.innerHTML = data.map(h=>`
+      <div style="padding:14px 20px;border-bottom:1px solid var(--border);cursor:default">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+          <span class="badge b-${h.priority==='high'?'diamond':h.priority==='medium'?'active':'archived'}">${h.priority||'?'}</span>
+          <span style="font-size:11px;color:var(--bright);font-weight:700">${esc(h.title||'')}</span>
+        </div>
+        <div style="font-size:10px;color:var(--dim);margin-bottom:4px">${esc(h.challenge||'')}</div>
+        <div style="font-size:10px;color:var(--accent)">🔬 Test: ${esc(h.testability||'')}</div>
+        <div style="font-size:10px;color:var(--dim);margin-top:4px">Unlocks ~${h.unlocked_idea_count||0} ideas | confidence: ${((h.confidence||0)*100).toFixed(0)}%</div>
+      </div>
+    `).join('');
+  } catch(e) { el.innerHTML=`<div class="empty">Error: ${e.message}</div>`; }
+}
+
+// FIX: source performance — signals from findings table (per-source accurate counts)
+//      ideas from idea_lineage using Set dedup per source_type
+//      diamonds by cross-referencing diamond idea IDs with lineage
+async function loadSources() {
+  const el = document.getElementById('src-list');
+  el.innerHTML = '<div class="empty">Loading...</div>';
+  try {
+    // 1. Signal counts — findings table is the ground truth for what was fetched per source
+    const findings = await q('findings', {select:'source_type', limit:5000});
+    const signalCounts = {};
+    findings.forEach(r => {
+      const t = r.source_type || 'unknown';
+      signalCounts[t] = (signalCounts[t]||0) + 1;
+    });
+
+    // 2. Idea counts — unique ideas per source_type from lineage
+    const lineage = await q('idea_lineage', {select:'idea_id,source_type', limit:5000});
+    const ideasBySource = {};   // source_type → Set of idea_ids
+    lineage.forEach(r => {
+      const t = r.source_type || 'unknown';
+      if (!ideasBySource[t]) ideasBySource[t] = new Set();
+      ideasBySource[t].add(r.idea_id);
+    });
+
+    // 3. Diamond idea IDs (to compute per-source diamond counts)
+    const diamondRows = await q('ideas', {select:'id', filter:[['status','eq.diamond']], limit:1000});
+    const diamondIds = new Set(diamondRows.map(d => d.id));
+    const diamondsBySource = {};
+    lineage.forEach(r => {
+      if (!diamondIds.has(r.idea_id)) return;
+      const t = r.source_type || 'unknown';
+      if (!diamondsBySource[t]) diamondsBySource[t] = new Set();
+      diamondsBySource[t].add(r.idea_id);
+    });
+
+    // 4. Merge: all known source types (union of findings + lineage)
+    const allTypes = new Set([...Object.keys(signalCounts), ...Object.keys(ideasBySource)]);
+
+    if (!allTypes.size) {
+      el.innerHTML = '<div class="empty">No source data yet — run Cycle 1 first</div>';
+      return;
+    }
+
+    const rows = [...allTypes].map(t => ({
+      source:   t,
+      signals:  signalCounts[t] || 0,
+      ideas:    ideasBySource[t]?.size || 0,
+      diamonds: diamondsBySource[t]?.size || 0,
+    })).sort((a,b) => b.signals - a.signals || b.ideas - a.ideas);
+
+    el.innerHTML = `<table class="tbl">
+      <thead><tr>
+        <th>Source</th><th>Signals</th><th>Ideas</th><th>💎</th><th>Yield</th>
+      </tr></thead>
+      <tbody>`+
+      rows.map(r => {
+        const yieldVal = r.ideas > 0 ? r.diamonds / r.ideas : 0;
+        const yieldStr = r.ideas > 0 ? (yieldVal*100).toFixed(0)+'%' : '—';
+        const yColor   = yieldVal > 0.2 ? 'var(--green)' : yieldVal > 0 ? 'var(--text)' : 'var(--dim)';
+        return `<tr>
+          <td style="color:var(--bright)">${esc(r.source)}</td>
+          <td style="color:var(--accent)">${r.signals || '—'}</td>
+          <td>${r.ideas}</td>
+          <td style="color:var(--gold)">${r.diamonds}</td>
+          <td style="color:${yColor};font-weight:700">${yieldStr}</td>
+        </tr>`;
+      }).join('')+
+      `</tbody></table>`;
+
+  } catch(e) {
+    el.innerHTML=`<div class="empty">Error loading sources: ${esc(e.message)}</div>`;
+  }
+}
+
+// ── UTILS ─────────────────────────────────────────────────────────────────────
+function set(id,v){ document.getElementById(id).textContent=v; }
+function esc(s){ return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+
+// ── INIT ─────────────────────────────────────────────────────────────────────
+(function(){
+  const u=localStorage.getItem(UK), k=localStorage.getItem(KK);
+  if(u&&k){ URL_=u; KEY_=k; document.getElementById('iurl').value=u; document.getElementById('ikey').value=k; boot(); }
+})();
+</script>
+</body>
+</html>

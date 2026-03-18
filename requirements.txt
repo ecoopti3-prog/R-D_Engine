@@ -1,0 +1,26 @@
+# Core
+pydantic>=2.5.0
+python-dotenv>=1.0.0
+
+# LLM API (OpenAI-compatible client — works with Groq, Sambanova, Fireworks, Mistral, Gemini)
+openai>=1.12.0
+tenacity>=8.2.3
+
+# Database
+supabase>=2.3.0
+
+# Embeddings (runs locally, no API cost)
+sentence-transformers>=2.6.0
+numpy>=1.26.0
+
+# HTTP scraping (sources.py)
+requests>=2.31.0
+
+# Tests
+pytest>=8.0.0
+
+# REMOVED (were in requirements but never imported):
+# arxiv>=2.1.0       — arXiv is accessed via HTTP in utils/sources.py, not this package
+# beautifulsoup4     — not used
+# httpx              — not used (openai client handles HTTP internally)
+# pytest-asyncio     — no async tests
