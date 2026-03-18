@@ -680,13 +680,30 @@ def enrich_unpaywall(papers: list[dict]) -> list[dict]:
         if not doi:
             continue
 
-        # Skip non-standard DOIs that Unpaywall rejects (422)
-        # Valid DOI must start with "10." and have a slash
+        # Skip non-standard DOIs
         if not doi.startswith("10.") or "/" not in doi:
             continue
-        # Skip dataset DOIs (zenodo, figshare, dryad) — Unpaywall returns 422
+        # Skip dataset DOIs — Unpaywall returns 422
         if any(x in doi.lower() for x in ["zenodo", "figshare", "dryad", "dvn/", "7910/"]):
             continue
+        # Skip known paywalled publisher prefixes — Unpaywall returns 422 for most
+        # Elsevier (10.1016), Springer (10.1007), Wiley (10.1002), etc.
+        # These clog the rate limit — only try arXiv and open-access prefixes
+        OPEN_PREFIXES = [
+            "10.48550",  # arXiv
+            "10.21203",  # Research Square (preprints)
+            "10.1101",   # bioRxiv/medRxiv
+            "10.31235",  # SocArXiv
+            "10.5281",   # Zenodo (valid ones)
+            "10.3390",   # MDPI (open access)
+            "10.3389",   # Frontiers (open access)
+            "10.1371",   # PLOS (open access)
+            "10.7717",   # PeerJ
+            "10.1145",   # ACM (sometimes OA)
+            "10.1109",   # IEEE (sometimes OA)
+        ]
+        if not any(doi.startswith(p) for p in OPEN_PREFIXES):
+            continue  # skip likely-paywalled DOIs entirely
 
         try:
             resp = _safe_get(
@@ -889,7 +906,6 @@ RSS_FEEDS = [
     # ── Robotics ─────────────────────────────────────────────────────────────
     ("https://www.therobotreport.com/feed/",                    "robot_report"),
     ("https://spectrum.ieee.org/feeds/topic/robotics.rss",      "ieee_robotics"),
-    ("https://www.roboticstoday.com/rss",                       "robotics_today"),
     # ── Data Center Cooling & Power ───────────────────────────────────────────
     ("https://www.datacenterknowledge.com/rss.xml",             "datacenter_knowledge"),
     ("https://www.datacenterdynamics.com/en/rss/",              "dcd"),
@@ -1074,23 +1090,23 @@ SEC_RISK_KEYWORDS = [
 
 def fetch_sec_edgar_signals(keywords=None, max_results=10, days_back=180):
     """
-    FIX v2: Use correct EDGAR full-text search endpoint and extract actual risk factor text.
-    Correct URL: https://efts.sec.gov/LATEST/search-index?q=...&forms=10-K,10-Q
-    Previous version used wrong endpoint — returned 0 results.
+    FIX v3: Use EDGAR full-text search UI endpoint (efts.sec.gov/LATEST/search-index)
+    with correct query format. The v2 query used double-quotes around company names
+    which EDGAR treats as exact phrase — very strict, returns 0 for long names.
+    Fix: use ticker symbol only + keyword, no quotes.
     """
     results         = []
     search_keywords = keywords or SEC_RISK_KEYWORDS
     since_date      = (datetime.now() - timedelta(days=days_back)).strftime("%Y-%m-%d")
 
-    # Use EDGAR full-text search — correct public endpoint
-    # Queries company name + risk keyword together
     for company_name, ticker in SEC_TARGET_COMPANIES[:6]:
-        for kw in search_keywords[:4]:
+        for kw in search_keywords[:3]:
             try:
+                # Use ticker + keyword — EDGAR indexes tickers reliably
                 resp = _safe_get(
                     "https://efts.sec.gov/LATEST/search-index",
                     params={
-                        "q":       f'"{company_name}" "{kw}"',
+                        "q":       f"{ticker} {kw}",
                         "forms":   "10-K,10-Q",
                         "startdt": since_date,
                         "enddt":   datetime.now().strftime("%Y-%m-%d"),
@@ -1100,7 +1116,7 @@ def fetch_sec_edgar_signals(keywords=None, max_results=10, days_back=180):
                         "Accept":     "application/json",
                     },
                 )
-                if not resp:
+                if not resp or resp.status_code != 200:
                     continue
                 data = resp.json()
                 hits = data.get("hits", {}).get("hits", [])
@@ -1110,42 +1126,40 @@ def fetch_sec_edgar_signals(keywords=None, max_results=10, days_back=180):
                 for hit in hits[:2]:
                     src          = hit.get("_source", {})
                     form_type    = src.get("form_type", "10-K")
-                    entity_name  = company_name
                     filing_date  = src.get("file_date", "")
                     accession_no = src.get("accession_no", "")
                     entity_id    = src.get("entity_id", "")
 
-                    # Build direct URL to filing index
-                    acc_clean = accession_no.replace("-", "")
-                    if entity_id and acc_clean:
-                        filing_url = f"https://www.sec.gov/Archives/edgar/data/{entity_id}/{acc_clean}/"
-                    else:
-                        filing_url = f"https://efts.sec.gov/LATEST/search-index?q={company_name}+{kw}&forms={form_type}"
+                    acc_clean  = accession_no.replace("-", "")
+                    filing_url = (
+                        f"https://www.sec.gov/Archives/edgar/data/{entity_id}/{acc_clean}/"
+                        if entity_id and acc_clean
+                        else f"https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&company={ticker}"
+                    )
 
-                    # Extract highlighted risk-factor snippet if available
                     highlights = hit.get("highlight", {})
-                    snippet    = ""
+                    snippet = ""
                     for field_hits in highlights.values():
                         if field_hits:
                             snippet = " ... ".join(str(h) for h in field_hits[:2])[:500]
                             break
                     if not snippet:
-                        snippet = f"{company_name} filing ({form_type}) references '{kw}' as a risk factor."
+                        snippet = f"{company_name} ({ticker}) {form_type} filing mentions '{kw}' as risk factor."
 
                     results.append({
-                        "title":       f"[{form_type}] {entity_name} risk factor: {kw}",
+                        "title":       f"[{form_type}] {company_name} — {kw}",
                         "abstract":    snippet,
                         "url":         filing_url,
-                        "company":     entity_name,
+                        "company":     company_name,
                         "keyword":     kw,
                         "filing_date": filing_date,
                         "form_type":   form_type,
                         "source":      "sec_edgar",
                         "signal_type": "regulatory_filing",
                     })
-                time.sleep(0.5)
+                time.sleep(0.4)
             except Exception as e:
-                logger.debug(f"[EDGAR] Query failed ({company_name} + {kw}): {e}")
+                logger.debug(f"[EDGAR] Query failed ({ticker} + {kw}): {e}")
 
             if len(results) >= max_results:
                 break
@@ -1296,43 +1310,55 @@ def fetch_nasa_research(keywords: list[str], max_results: int = 10) -> list[dict
     ]
 
     # ── Part 1: NTRS papers ───────────────────────────────────────────────────
+    # FIX v3: NTRS /api/citations/search returns 0 results for all queries.
+    # Use the correct NTRS search endpoint with proper parameters.
     ntrs_per_query = max(2, max_results // len(NASA_DOMAIN_QUERIES))
 
     for ntrs_query in NASA_DOMAIN_QUERIES:
         logger.info(f"[NASA-NTRS] Searching: {ntrs_query}")
-        resp = _safe_get(
-            "https://ntrs.nasa.gov/api/citations/search",
-            params={"q": ntrs_query, "rows": ntrs_per_query, "sort": "modified desc"},
-            headers={"User-Agent": "rd-engine-research/1.0", "Accept": "application/json"},
-        )
-        if not resp:
-            continue
-        try:
-            data = resp.json()
-            hits = data.get("hits", {})
-            for doc in (hits.get("hits") or []):
-                src   = doc.get("_source", {})
-                title = (src.get("title") or "").strip()
-                if not title:
+        # Try both known endpoints
+        for ntrs_url, ntrs_params in [
+            (
+                "https://ntrs.nasa.gov/api/citations/search",
+                {"q": ntrs_query, "rows": ntrs_per_query, "sort": "modified desc"},
+            ),
+            (
+                "https://ntrs.nasa.gov/search",
+                {"q": ntrs_query, "rows": ntrs_per_query},
+            ),
+        ]:
+            resp = _safe_get(
+                ntrs_url,
+                params=ntrs_params,
+                headers={"User-Agent": "rd-engine-research/1.0", "Accept": "application/json"},
+            )
+            if not resp:
+                continue
+            try:
+                data = resp.json()
+                # Handle both response formats
+                hits_data = data.get("hits", {})
+                docs = hits_data.get("hits") or data.get("results") or []
+                if not docs:
                     continue
-                ntrs_id  = src.get("id") or doc.get("_id", "")
-                pub_date = (src.get("modified") or "")[:10]
-                affils   = src.get("authorAffiliations") or []
-                authors  = [
-                    (a.get("meta") or {}).get("author", {}).get("name", "")
-                    for a in affils[:4]
-                ]
-                results.append({
-                    "title":     title,
-                    "abstract":  (src.get("abstract") or "")[:600],
-                    "url":       f"https://ntrs.nasa.gov/citations/{ntrs_id}" if ntrs_id else "https://ntrs.nasa.gov",
-                    "authors":   [a for a in authors if a],
-                    "published": pub_date,
-                    "type":      src.get("stiTypeDetails", ""),
-                    "source":    "nasa_ntrs",
-                })
-        except Exception as e:
-            logger.warning(f"[NASA-NTRS] Parse error: {e}")
+                for doc in docs:
+                    src   = doc.get("_source", doc)  # flat or nested
+                    title = (src.get("title") or "").strip()
+                    if not title:
+                        continue
+                    ntrs_id  = src.get("id") or doc.get("_id", "")
+                    pub_date = (src.get("modified") or src.get("publicationDate") or "")[:10]
+                    results.append({
+                        "title":     title,
+                        "abstract":  (src.get("abstract") or "")[:600],
+                        "url":       f"https://ntrs.nasa.gov/citations/{ntrs_id}" if ntrs_id else "https://ntrs.nasa.gov",
+                        "published": pub_date,
+                        "type":      src.get("stiTypeDetails", ""),
+                        "source":    "nasa_ntrs",
+                    })
+                break  # success — don't try alternate endpoint
+            except Exception as e:
+                logger.warning(f"[NASA-NTRS] Parse error ({ntrs_url}): {e}")
         time.sleep(0.5)
 
     # deduplicate by title
@@ -1415,7 +1441,7 @@ def fetch_darpa_baa_signals(keywords=None, max_results=10, days_back=365):
     # ── Source 1: DARPA RSS ───────────────────────────────────────────────────
     DARPA_RSS_URLS = [
         "https://www.darpa.mil/rss.xml",
-        "https://www.darpa.mil/work-with-us/opportunities.rss",
+        # opportunities.rss returned 404 — removed
     ]
     import xml.etree.ElementTree as ET
 
@@ -1448,44 +1474,35 @@ def fetch_darpa_baa_signals(keywords=None, max_results=10, days_back=365):
         if results:
             break  # stop after first working feed
 
-    # ── Source 2: SAM.gov opportunities search (public, no key) ──────────────
+    # ── Source 2: grants.gov RSS — public, no key, covers DARPA/ARPA-E ─────────
     if len(results) < max_results:
         try:
-            since_dt = (datetime.now() - timedelta(days=days_back)).strftime("%m/%d/%Y")
-            sam_resp = _safe_get(
-                "https://sam.gov/api/prod/sgs/v1/search/",
-                params={
-                    "random":   "1234",
-                    "index":    "opp",
-                    "q":        "semiconductor thermal computing microelectronics",
-                    "page":     "0",
-                    "pageSize": "10",
-                    "sort":     "-modifiedDate",
-                    "mode":     "search",
-                    "orgType":  "DARPA,ARPA-E",
-                },
-                headers={"User-Agent": "rd-engine-research/1.0", "Accept": "application/json"},
+            grants_resp = _safe_get(
+                "https://www.grants.gov/rss/GG_NewOpps.xml",
+                headers={"User-Agent": "rd-engine-research/1.0"},
             )
-            if sam_resp:
-                sam_data = sam_resp.json()
-                for opp in (sam_data.get("_embedded", {}).get("results") or [])[:5]:
-                    title    = opp.get("title", "")
-                    org      = opp.get("organizationName", "")
-                    synopsis = (opp.get("description") or "")[:500]
-                    opp_id   = opp.get("opportunityId", "")
-                    url      = f"https://sam.gov/opp/{opp_id}/view" if opp_id else "https://sam.gov/search/?index=opp"
-                    if not title:
+            if grants_resp and grants_resp.status_code == 200:
+                import xml.etree.ElementTree as ET2
+                root2 = ET2.fromstring(grants_resp.text)
+                for item in root2.findall(".//item")[:30]:
+                    title    = (item.findtext("title") or "").strip()
+                    desc     = (item.findtext("description") or "")[:400].strip()
+                    link     = (item.findtext("link") or "").strip()
+                    combined = (title + " " + desc).lower()
+                    if not any(kw in combined for kw in kw_filter):
                         continue
                     results.append({
-                        "title":       f"[SAM.gov/{org}] {title}",
-                        "abstract":    synopsis or title,
-                        "url":         url,
-                        "posted_date": opp.get("postedDate", ""),
+                        "title":       f"[Grants.gov] {title}",
+                        "abstract":    desc or title,
+                        "url":         link,
+                        "posted_date": item.findtext("pubDate") or "",
                         "source":      "darpa_baa",
                         "signal_type": "government_funding_signal",
                     })
+                    if len(results) >= max_results:
+                        break
         except Exception as e:
-            logger.debug(f"[DARPA/SAM] Error: {e}")
+            logger.debug(f"[DARPA/Grants.gov] Error: {e}")
 
     logger.info(f"[DARPA] Fetched {len(results)} DARPA BAA signals")
     return results[:max_results]
