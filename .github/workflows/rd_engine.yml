@@ -25,6 +25,10 @@ on:
         description: 'Force run even if cycle already done today (bypass daily guard)'
         required: false
         default: 'false'
+      profile:
+        description: 'Research profile: all | chips | robotics | datacenter'
+        required: false
+        default: 'all'
 
 jobs:
   determine_cycle:
@@ -161,6 +165,7 @@ jobs:
           LENS_API_KEY:             ${{ secrets.LENS_API_KEY }}
           UNPAYWALL_EMAIL:          ${{ secrets.OPENALEX_EMAIL }}
           NASA_API_KEY:             ${{ secrets.NASA_API_KEY }}
+          SEMANTIC_SCHOLAR_API_KEY: ${{ secrets.SEMANTIC_SCHOLAR_API_KEY }}
         run: |
           ARGS="--cycle ${{ needs.determine_cycle.outputs.cycle_number }}"
 
@@ -171,6 +176,12 @@ jobs:
 
           if [ "${{ github.event.inputs.force_run }}" = "true" ]; then
             ARGS="$ARGS --force"
+          fi
+
+          # Research profile
+          PROFILE="${{ github.event.inputs.profile }}"
+          if [ -n "$PROFILE" ] && [ "$PROFILE" != "all" ]; then
+            ARGS="$ARGS --profile $PROFILE"
           fi
 
           python main.py $ARGS
