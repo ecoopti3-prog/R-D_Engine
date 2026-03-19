@@ -87,13 +87,19 @@ jobs:
               echo "is_weekly=false" >> $GITHUB_OUTPUT
               echo "cycle=4"         >> $GITHUB_OUTPUT
             else
-              if   [ "$TOTAL_MIN" -lt 330 ];  then echo "cycle=1" >> $GITHUB_OUTPUT
-              elif [ "$TOTAL_MIN" -lt 690 ];  then echo "cycle=2" >> $GITHUB_OUTPUT
-              elif [ "$TOTAL_MIN" -lt 1050 ]; then echo "cycle=3" >> $GITHUB_OUTPUT
-              else                                  echo "cycle=4" >> $GITHUB_OUTPUT
+              # Unexpected trigger time — map strictly to nearest scheduled cycle
+              # Cycle 1: 06:00 UTC (360min), Cycle 2: 12:00 UTC (720min)
+              # Cycle 3: 18:00 UTC (1080min), Cycle 4: 23:00 UTC (1380min)
+              if   [ "$TOTAL_MIN" -ge 330 ]  && [ "$TOTAL_MIN" -lt 660 ];  then echo "cycle=1" >> $GITHUB_OUTPUT
+              elif [ "$TOTAL_MIN" -ge 660 ]  && [ "$TOTAL_MIN" -lt 990 ];  then echo "cycle=2" >> $GITHUB_OUTPUT
+              elif [ "$TOTAL_MIN" -ge 990 ]  && [ "$TOTAL_MIN" -lt 1260 ]; then echo "cycle=3" >> $GITHUB_OUTPUT
+              elif [ "$TOTAL_MIN" -ge 1260 ];                               then echo "cycle=4" >> $GITHUB_OUTPUT
+              else
+                # Before 05:30 UTC — this is a late Cycle 4 from previous day, skip
+                echo "cycle=0" >> $GITHUB_OUTPUT
+                echo "WARNING: Triggered before 05:30 UTC — skipping to avoid duplicate runs"
               fi
               echo "is_weekly=false" >> $GITHUB_OUTPUT
-              echo "WARNING: Unexpected trigger time HOUR=$HOUR MIN=$MINUTE"
             fi
           fi
 
