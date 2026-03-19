@@ -29,13 +29,31 @@ AGENT_SOURCE_TYPES = {
 }
 
 
-def load_seed():
-    seed_path = Path("config/seed.json")
+def load_seed(profile: str = "all") -> dict:
+    """
+    Load research profile seed.
+    profile="all"        → config/seed.json           (all domains)
+    profile="chips"      → config/seed_chips.json
+    profile="robotics"   → config/seed_robotics.json
+    profile="datacenter" → config/seed_datacenter.json
+    """
+    if profile and profile != "all":
+        seed_path = Path(f"config/seed_{profile}.json")
+        if not seed_path.exists():
+            logger.warning(f"[Seed] Profile '{profile}' not found at {seed_path} — falling back to seed.json")
+            seed_path = Path("config/seed.json")
+    else:
+        seed_path = Path("config/seed.json")
+
     try:
         with seed_path.open() as f:
-            return json.load(f)
+            seed = json.load(f)
+        logger.info(f"[Seed] Loaded profile='{profile}' from {seed_path} "
+                    f"({len(seed.get('domains', []))} domains, "
+                    f"{len(seed.get('seed_keywords', []))} keywords)")
+        return seed
     except FileNotFoundError:
-        logger.error("[FATAL] config/seed.json not found! Rename seed_backup.json → seed.json")
+        logger.error(f"[FATAL] {seed_path} not found!")
         sys.exit(1)
 
 
@@ -916,6 +934,9 @@ def _update_seed_keywords(new_keywords: list) -> None:
 def main():
     parser = argparse.ArgumentParser(description="Autonomous R&D Engine")
     parser.add_argument("--cycle",        type=int, choices=[1, 2, 3, 4])
+    parser.add_argument("--profile",      type=str, default="all",
+                        choices=["all", "chips", "robotics", "datacenter"],
+                        help="Research profile — selects seed_<profile>.json")
     parser.add_argument("--test-physics", action="store_true")
     parser.add_argument("--cold-start",   action="store_true")
     parser.add_argument("--weekly",       action="store_true")
@@ -932,7 +953,7 @@ def main():
         run_weekly_maintenance()
         return
 
-    seed         = load_seed()
+    seed         = load_seed(args.profile)
     cycle_number = args.cycle or 1
     cycle_id     = str(uuid.uuid4())
 
@@ -967,7 +988,14 @@ def main():
             cycle2_id = db.load_today_cycle_id(cycle_number=2)
             ideas     = db.load_active_ideas(cycle_id=cycle2_id)
             if not ideas:
+                # Cycle 2 not found — load all active ideas regardless of cycle
                 ideas = db.load_active_ideas()
+                if ideas:
+                    logger.warning(f"[Cycle3] Cycle 2 not found today — running kill round on {len(ideas)} active ideas from DB")
+                else:
+                    logger.warning("[Cycle3] No active ideas found — skipping kill round")
+                    db.complete_cycle(cycle_id, summary="Cycle 3 skipped — no active ideas")
+                    sys.exit(0)
             run_cycle_3_kill_round(cycle_id, ideas)
 
         elif cycle_number == 4:
