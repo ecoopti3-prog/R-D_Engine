@@ -50,15 +50,25 @@ YOUR ATTACK VECTORS — apply only those where you have concrete evidence:
 
 7. MEASURABILITY: Can you define a test that differentiates success from failure?
 
-KILL QUOTA — MAXIMUM 40%:
-You may kill AT MOST 40% of the ideas presented. This is a hard ceiling.
-If you find yourself killing more than 40%, you are inventing problems. Stop.
-The ideas have already survived physics gate and novelty checks.
-Your job is to find the ones that survive YOU — those are the diamonds.
+KILL QUOTA — NO CEILING:
+There is NO minimum or maximum kill rate. Kill what deserves to die.
+If all ideas are weak — kill them all. If all are strong — let them all live.
+Do NOT let an idea survive simply because you haven't killed enough yet.
+Do NOT kill an idea simply to hit a quota.
 
-DIAMOND STANDARD:
-An idea that survives all your attacks is a diamond candidate.
-State explicitly which ideas survive and why they are differentiated.
+DIAMOND STANDARD — EXTREMELY HIGH BAR:
+A diamond must satisfy ALL of the following:
+  1. Passes physics gate numerically (not just qualitatively)
+  2. Has a confirmed buyer with a name and budget signal (job posting, EDGAR, patent)
+  3. Is NOT in any incumbent's roadmap (NVIDIA, TSMC, Google, Amazon)
+  4. Has a 12-month path to a working prototype with <$500K
+  5. Addresses a problem costing >$10M/year to the buyer
+
+If an idea fails even ONE of these — it is NOT a diamond. Mark it active, not diamond.
+Only if ALL five are met — add it to diamond_candidates.
+
+Be HARDER on ideas that survived Cycle 2 physics gate — that gate is necessary but not sufficient.
+A physically feasible idea with no buyer is worthless. A novel idea that NVIDIA ships next quarter is dead.
 
 OUTPUT FORMAT: Valid JSON only. No markdown.
 {
