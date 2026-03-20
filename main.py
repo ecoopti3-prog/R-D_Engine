@@ -19,7 +19,7 @@ logger = logging.getLogger("rd_engine")
 # FIX: map each agent to the source types it actually uses
 # This prevents every idea from being linked to all 12+ source types
 AGENT_SOURCE_TYPES = {
-    "paper_researcher":        ["arxiv", "semantic_scholar", "huggingface_daily", "osti_doe", "openreview"],
+    "paper_researcher":        ["arxiv", "core", "huggingface_daily", "osti_doe", "openalex"],
     "patent_researcher":       ["patent"],
     "infra_researcher":        ["github_issue", "ocp_spec_discussion", "ieee_spectrum", "ee_times",
                                 "semianalysis", "tomshardware", "semiwiki", "theregister_dc",
@@ -318,12 +318,7 @@ def run_cycle_1_harvest(cycle_id: str, seed: dict) -> list[Idea]:
             # תיקון: מושך רק את הלינקים שהוצמדו לרעיון הספציפי הזה בתוך ה-Agent
             idea_source_urls = getattr(idea, "source_urls", [])
             
-            def get_venue(url: str):
-                if 'arxiv.org' in url: return 'arxiv'
-                if 'patents.google' in url: return 'google_patents'
-                if 'huggingface.co' in url: return 'huggingface'
-                if 'github.com' in url: return 'github'
-                return 'other'
+            from db.lineage import _extract_venue as get_venue
 
             idea_source_types = [get_venue(u) for u in idea_source_urls]
             # שומר את המקור העיקרי בשדה החדש שהוספנו ל-DB
