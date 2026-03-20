@@ -375,11 +375,11 @@ def run_cycle_2_physics_market(cycle_id: str, ideas: list[Idea]) -> list[Idea]:
     all_findings      = db.load_today_findings()
     ideas_cycle_id    = getattr(ideas[0], "cycle_id", None) if ideas else None
 
-    # FIX: Novelty cold start — was excluding cycle 1 ideas (ideas_cycle_id) from
-    # the archive, leaving archive empty on day 1 → every idea got novelty=10 (no comparison).
-    # Cycle 2 processes ideas FROM cycle 1, so we should NOT exclude cycle 1 from archive.
-    # Only exclude the current cycle 2 ID (ideas being scored right now) to avoid self-comparison.
-    archive_embeddings = db.get_all_embeddings(exclude_cycle_id=cycle_id)
+    # Novelty archive: exclude the ideas currently being evaluated (ideas_cycle_id = cycle 1)
+    # to prevent self-comparison (sim=1.0 kills everything).
+    # cycle_id here is cycle 2 — ideas are from cycle 1 — so we exclude cycle 1.
+    # On day 2+, older cycles remain in archive and provide genuine novelty signal.
+    archive_embeddings = db.get_all_embeddings(exclude_cycle_id=ideas_cycle_id)
 
     ideas_as_dicts    = [i.model_dump(mode="json") for i in ideas]
     findings_as_dicts = [f if isinstance(f, dict) else f for f in all_findings[:30]]
