@@ -2,7 +2,8 @@
 utils/sources.py — Actual scrapers for data ingestion.
 
 FIXES vs original:
-  1. SemanticScholar: exponential backoff retry (was 429 with single sleep)
+  1. SemanticScholar: REMOVED — requires business/institutional API key (403).
+     Replaced with CORE API (230M+ open-access papers, free, no key needed).
   2. OpenReview: REMOVED
   3. Greenhouse slugs: cerebras→cerebrassystems, removed openai/groq-inc/sifive/efinixinc/rivos
   4. Lever slugs: anthropic→Anthropic (case-sensitive), removed groq
@@ -10,6 +11,7 @@ FIXES vs original:
   6. DARPA RSS: news.xml/news → rss.xml (correct URL)
   7. PatentsView: skip cleanly when PATENTSVIEW_API_KEY not set (was silent 403)
   8. SEC EDGAR: removed invalid highlight param that caused empty results
+  9. pypdf EOF warnings: suppressed (cosmetic warnings for partial PDF downloads)
 """
 from __future__ import annotations
 import time
@@ -121,54 +123,52 @@ def fetch_arxiv_papers(keywords: list[str], max_results: int = 15, days_back: in
     return results
 
 
-# ── Semantic Scholar ────────────────────────────────────────────────────────────
+# ── CORE API ────────────────────────────────────────────────────────────────────
 
-def fetch_semantic_scholar_papers(keywords: list[str], max_results: int = 15, days_back: int = 60) -> list[dict]:
+def fetch_core_papers(keywords: list[str], max_results: int = 15, days_back: int = 60) -> list[dict]:
     """
-    Semantic Scholar API — best source for citation counts and paper quality signals.
-    
-    Advantages over arXiv:
-    - Citation count = proxy for impact/importance
-    - Includes IEEE/ACM papers not on arXiv
-    - Influence score identifies seminal papers
-    - Free API, 100 req/sec with key, 1 req/sec without
-    
-    API key: set SEMANTIC_SCHOLAR_API_KEY env var (free at semanticscholar.org/product/api)
-    Without key: 1 req/sec — still works, just slower.
+    CORE API — 230M+ open-access papers, free, no business email required.
+    Replaces SemanticScholar which requires institutional/business API key.
+
+    Free tier: 10k requests/month, no key needed.
+    Optional: set CORE_API_KEY for higher rate limits (register at core.ac.uk/services/api).
+
+    Advantages:
+    - Full open-access PDFs available
+    - Covers IEEE, ACM, arXiv, institutional repos
+    - No institutional email required
+    - Citation counts available
     """
     import os as _os
     from datetime import datetime, timedelta
 
-    api_key    = _os.environ.get("SEMANTIC_SCHOLAR_API_KEY", "")
+    api_key    = _os.environ.get("CORE_API_KEY", "")
     since_year = (datetime.utcnow() - timedelta(days=days_back)).year
     results    = []
     seen_ids   = set()
 
     headers = {"User-Agent": "rd-engine-research/1.0"}
     if api_key:
-        headers["x-api-key"] = api_key
+        headers["Authorization"] = f"Bearer {api_key}"
 
-    # Use short focused queries — S2 search is strict
-    query_terms = keywords[:5]
-
-    for term in query_terms[:4]:
+    for term in keywords[:4]:
         try:
+            params = {
+                "q":      f"{term} yearPublished>={since_year}",
+                "limit":  min(10, max_results // 4 + 1),
+                "offset": 0,
+            }
             resp = _safe_get(
-                "https://api.semanticscholar.org/graph/v1/paper/search",
-                params={
-                    "query":  term,
-                    "fields": "paperId,title,abstract,year,citationCount,influentialCitationCount,openAccessPdf,externalIds",
-                    "limit":  min(10, max_results // len(query_terms[:4])),
-                    "year":   f"{since_year}-",
-                },
+                "https://api.core.ac.uk/v3/search/works",
+                params=params,
                 headers=headers,
             )
             if not resp or resp.status_code != 200:
                 continue
 
             data = resp.json()
-            for paper in (data.get("data") or []):
-                pid = paper.get("paperId", "")
+            for paper in (data.get("results") or []):
+                pid = str(paper.get("id", ""))
                 if not pid or pid in seen_ids:
                     continue
                 seen_ids.add(pid)
@@ -178,43 +178,39 @@ def fetch_semantic_scholar_papers(keywords: list[str], max_results: int = 15, da
                 if not title or len(abstract) < 30:
                     continue
 
-                # Build URLs
-                paper_url = f"https://www.semanticscholar.org/paper/{pid}"
-                pdf_info  = paper.get("openAccessPdf") or {}
-                pdf_url   = pdf_info.get("url", "")
+                doi      = paper.get("doi") or ""
+                pdf_url  = paper.get("downloadUrl") or ""
+                if not pdf_url:
+                    for link in (paper.get("links") or []):
+                        if link.get("type") == "download":
+                            pdf_url = link.get("url", "")
+                            break
 
-                # DOI from externalIds
-                ext_ids = paper.get("externalIds") or {}
-                doi     = ext_ids.get("DOI", "")
-                arxiv_id = ext_ids.get("ArXiv", "")
-                if arxiv_id and not pdf_url:
-                    pdf_url = f"https://arxiv.org/pdf/{arxiv_id}"
-
-                citations = paper.get("citationCount", 0) or 0
-                influence = paper.get("influentialCitationCount", 0) or 0
+                citations = paper.get("citationCount") or 0
+                pub_year  = str(paper.get("yearPublished") or "")
+                paper_url = f"https://core.ac.uk/works/{pid}" if pid else ""
+                if doi:
+                    paper_url = f"https://doi.org/{doi}"
 
                 results.append({
-                    "title":        title,
-                    "abstract":     abstract[:800],
-                    "url":          paper_url,
-                    "pdf_url":      pdf_url,
-                    "doi":          doi,
-                    "published":    str(paper.get("year", "")),
-                    "citations":    citations,
-                    "influence":    influence,
-                    "source":       "semantic_scholar",
+                    "title":     title,
+                    "abstract":  abstract[:800],
+                    "url":       paper_url,
+                    "pdf_url":   pdf_url,
+                    "doi":       doi,
+                    "published": pub_year,
+                    "citations": citations,
+                    "source":    "core",
                 })
 
-            # Rate limiting
-            delay = 0.2 if api_key else 1.1
+            delay = 0.5 if not api_key else 0.15
             time.sleep(delay)
 
         except Exception as e:
-            logger.debug(f"[SemanticScholar] Query '{term}' failed: {e}")
+            logger.debug(f"[CORE] Query '{term}' failed: {e}")
 
-    # Sort by influence + citations — most impactful papers first
-    results.sort(key=lambda x: (x.get("influence", 0) * 3 + x.get("citations", 0)), reverse=True)
-    logger.info(f"[SemanticScholar] Fetched {len(results)} papers")
+    results.sort(key=lambda x: x.get("citations", 0), reverse=True)
+    logger.info(f"[CORE] Fetched {len(results)} papers")
     return results[:max_results]
 
 
@@ -700,7 +696,7 @@ def fetch_all_for_cycle1(seed: dict) -> dict:
     signals      = seed.get("intelligence_signals", [])
     github_token = os.environ.get("GITHUB_TOKEN", "")
 
-    logger.info("[Sources] Starting full fetch for Cycle 1 harvest — 14 sources (SemanticScholar+CrossRef+arXiv fulltext)")
+    logger.info("[Sources] Starting full fetch for Cycle 1 harvest — 14 sources (CORE+CrossRef+arXiv fulltext)")
 
     result = {
         "papers": [], "patents": [], "job_signals": [],
@@ -714,7 +710,7 @@ def fetch_all_for_cycle1(seed: dict) -> dict:
         ("OpenAlex",        fetch_openalex_papers,           {"keywords": keywords, "max_results": 15, "days_back": 90}),
         ("HuggingFace",     fetch_huggingface_papers,        {"max_results": 15}),
         ("OSTI/DOE",        fetch_osti_research,             {"keywords": keywords, "max_results": 8}),
-        ("SemanticScholar", fetch_semantic_scholar_papers,   {"keywords": keywords, "max_results": 15, "days_back": 60}),
+        ("CORE",           fetch_core_papers,               {"keywords": keywords, "max_results": 15, "days_back": 60}),
         ("CrossRef",        fetch_crossref_papers,           {"keywords": keywords, "max_results": 10, "days_back": 90}),
     ]:
         try:
@@ -1005,6 +1001,10 @@ def _fetch_pdf_fulltext(papers: list[dict], max_papers: int = 8) -> list[dict]:
             # Try pypdf first (faster, no C deps, works on GitHub Actions)
             try:
                 import pypdf
+                import logging as _logging
+                # Suppress pypdf EOF/structure warnings — they're cosmetic for partial PDFs
+                _pypdf_logger = _logging.getLogger("pypdf")
+                _pypdf_logger.setLevel(_logging.ERROR)
                 reader = pypdf.PdfReader(io.BytesIO(raw))
                 pages_text = []
                 for page in reader.pages[:6]:  # first 6 pages = intro+methods+results
