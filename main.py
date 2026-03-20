@@ -989,7 +989,7 @@ def main():
                     logger.warning(f"[Cycle3] Cycle 2 not found today — running kill round on {len(ideas)} active ideas from DB")
                 else:
                     logger.warning("[Cycle3] No active ideas found — skipping kill round")
-                    db.complete_cycle(cycle_id, summary="Cycle 3 skipped — no active ideas")
+                    db.complete_cycle(cycle_id, status="skipped")
                     sys.exit(0)
             run_cycle_3_kill_round(cycle_id, ideas)
 
